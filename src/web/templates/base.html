@@ -39,5 +39,69 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+<script>
+(function() {
+  const statusLine = document.querySelector('.status-line');
+  const buttons = document.querySelectorAll('form[action*="/run"], form[action*="/discovery"] button');
+  let wasRunning = {% if run_status.running %}true{% else %}false{% endif %};
+  let pollTimer = null;
+
+  function updateUI(data) {
+    // Update status text
+    if (statusLine) {
+      let msg = data.message || '';
+      if (data.running) {
+        msg = '⏳ ' + msg;
+      }
+      statusLine.textContent = msg;
+    }
+
+    // Update button disabled state
+    buttons.forEach(btn => {
+      btn.disabled = !!data.running;
+      if (data.running) {
+        btn.style.opacity = '0.6';
+        btn.style.cursor = 'not-allowed';
+      } else {
+        btn.style.opacity = '';
+        btn.style.cursor = '';
+      }
+    });
+
+    // If was running and now stopped, reload page to get fresh data
+    if (wasRunning && !data.running) {
+      wasRunning = false;
+      clearInterval(pollTimer);
+      window.location.reload();
+      return;
+    }
+    wasRunning = data.running;
+  }
+
+  function poll() {
+    fetch('/run-status')
+      .then(r => r.json())
+      .then(data => {
+        updateUI(data);
+        // Start or stop polling based on running state
+        if (data.running && !pollTimer) {
+          pollTimer = setInterval(poll, 2000);
+        } else if (!data.running && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      })
+      .catch(() => {});
+  }
+
+  // Start polling if currently running
+  if (wasRunning) {
+    pollTimer = setInterval(poll, 2000);
+  }
+
+  // Also poll once on page load to catch state changes
+  setTimeout(poll, 1000);
+})();
+</script>
 </body>
 </html>

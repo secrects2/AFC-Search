@@ -223,13 +223,42 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             try:
                 from src.services.discovery_search import DiscoverySearchService
                 service = DiscoverySearchService(db, config, root)
-                result = service.search_all_products()
+
+                # Get products to show total count
+                products = db.list_products(active_only=True)
+                total = len(products)
+                total_new = 0
+                searched = 0
+
+                with runner_lock:
+                    runner_state["message"] = f"搜尋新連結中... (0/{total})"
+
+                for i, product in enumerate(products, 1):
+                    with runner_lock:
+                        runner_state["message"] = (
+                            f"搜尋中 [{i}/{total}] {product.product_name[:20]}..."
+                        )
+                    try:
+                        from src.services.budget_tracker import BudgetExhausted
+                        service.budget.check_budget()
+                        result = service.search_product(product.id)
+                        total_new += result["new"]
+                        searched += 1
+                    except BudgetExhausted as exc:
+                        LOGGER.warning("預算不足，停止搜尋：%s", exc)
+                        with runner_lock:
+                            runner_state["warning"] = f"預算不足，已搜尋 {searched}/{total}"
+                        break
+                    except Exception as exc:
+                        LOGGER.warning("搜尋失敗：%s - %s", product.product_name, exc)
+
                 with runner_lock:
                     runner_state["message"] = (
-                        f"搜尋完成：{result['searched']} 商品, "
-                        f"{result['total_new']} 新連結"
+                        f"搜尋完成：{searched}/{total} 商品, "
+                        f"{total_new} 筆新連結"
                     )
             except Exception as exc:
+                LOGGER.exception("Discovery search failed")
                 with runner_lock:
                     runner_state["message"] = f"搜尋失敗：{exc}"
             finally:
