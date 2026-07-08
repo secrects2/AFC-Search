@@ -68,6 +68,15 @@ class DiscoverySearchService:
 
         results = provider.search(temp_product, int(self.config.max_results_per_product))
 
+        # Augment with FindPrice search
+        try:
+            from src.search.findprice_api import FindPriceProvider
+            fp_provider = FindPriceProvider()
+            fp_results = fp_provider.search(temp_product, int(self.config.max_results_per_product))
+            results.extend(fp_results)
+        except Exception as e:
+            LOGGER.warning("FindPrice search augmentation failed: %s", e)
+
         # Log API usage
         self.db.log_api_usage(
             provider=provider.last_provider,

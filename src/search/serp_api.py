@@ -30,6 +30,7 @@ PLATFORM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"24h\.pchome\.com\.tw|ecshweb\.pchome\.com\.tw|pchome\.com\.tw", re.IGNORECASE), "pchome"),
     (re.compile(r"ruten\.com\.tw", re.IGNORECASE), "ruten"),
     (re.compile(r"rakuten\.com\.tw", re.IGNORECASE), "rakuten"),
+    (re.compile(r"coupang\.onelink\.me|coupang\.com", re.IGNORECASE), "coupang"),
 ]
 
 # URL patterns that indicate a NON-product page (category, search, collection, etc.)
