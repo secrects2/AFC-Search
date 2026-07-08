@@ -81,10 +81,24 @@ class DiscoverySearchService:
         existing_candidates = self.db.list_candidates(product_id=product_id)
         existing_urls = {c.url for c in existing_candidates}
 
+        from src.matcher import match_score
+
         new_count = 0
+        skipped_count = 0
         for sr in results:
             if sr.url in existing_urls:
                 continue
+
+            # Name matching: compare search result title vs product name
+            score = match_score(product.product_name, sr.product_name)
+            if score < 50:
+                LOGGER.info(
+                    "跳過不相關結果 (score=%d): [%s] vs [%s] → %s",
+                    score, product.product_name, sr.product_name[:40], sr.url[:60],
+                )
+                skipped_count += 1
+                continue
+
             platform = detect_platform(sr.url)
             self.db.upsert_candidate(
                 product_id=product_id,
@@ -94,8 +108,16 @@ class DiscoverySearchService:
                 source_found_by=sr.source or "serpapi",
             )
             new_count += 1
+            if score < 70:
+                LOGGER.info(
+                    "低信心候選 (score=%d): [%s] → %s",
+                    score, sr.product_name[:40], sr.url[:60],
+                )
 
-        return {"found": len(results), "new": new_count, "existing": len(existing_urls)}
+        if skipped_count:
+            LOGGER.info("名稱比對過濾掉 %d 筆不相關結果", skipped_count)
+
+        return {"found": len(results), "new": new_count, "existing": len(existing_urls), "skipped": skipped_count}
 
     def search_all_products(self, active_only: bool = True) -> dict[str, int]:
         """Search all products. Stops when budget exhausted."""

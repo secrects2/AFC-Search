@@ -32,6 +32,35 @@ PLATFORM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"rakuten\.com\.tw", re.IGNORECASE), "rakuten"),
 ]
 
+# URL patterns that indicate a NON-product page (category, search, collection, etc.)
+_NON_PRODUCT_PATTERNS: list[re.Pattern[str]] = [
+    # Yahoo: search, category, collection, rushbuy, activity, event pages
+    re.compile(r"yahoo\.com.*/search", re.IGNORECASE),
+    re.compile(r"yahoo\.com.*/category/", re.IGNORECASE),
+    re.compile(r"yahoo\.com.*/smartcollection", re.IGNORECASE),
+    re.compile(r"yahoo\.com.*/rushbuy", re.IGNORECASE),
+    re.compile(r"yahoo\.com.*/activity", re.IGNORECASE),
+    re.compile(r"yahoo\.com.*/event", re.IGNORECASE),
+    # PChome: search, category, store pages
+    re.compile(r"pchome\.com\.tw/search", re.IGNORECASE),
+    re.compile(r"pchome\.com\.tw.*/category", re.IGNORECASE),
+    re.compile(r"pchome\.com\.tw.*/store/", re.IGNORECASE),
+    # Shopee: search, collection pages
+    re.compile(r"shopee\.tw/search", re.IGNORECASE),
+    re.compile(r"shopee\.tw/collection/", re.IGNORECASE),
+    re.compile(r"shopee\.tw/mall/", re.IGNORECASE),
+    # Momo: search, category
+    re.compile(r"momo\.com\.tw.*/search", re.IGNORECASE),
+    re.compile(r"momo\.com\.tw.*/category", re.IGNORECASE),
+    re.compile(r"momo\.com\.tw.*/cateSearch", re.IGNORECASE),
+    # Ruten: search
+    re.compile(r"ruten\.com\.tw/find/", re.IGNORECASE),
+    re.compile(r"ruten\.com\.tw/category/", re.IGNORECASE),
+    # Generic: any URL ending with just a query string containing common search params
+    re.compile(r"[?&]keyword=", re.IGNORECASE),
+    re.compile(r"[?&]q=", re.IGNORECASE),
+]
+
 
 def detect_platform(url: str) -> str:
     """Detect e-commerce platform from URL."""
@@ -39,6 +68,14 @@ def detect_platform(url: str) -> str:
         if pattern.search(url):
             return platform
     return "other"
+
+
+def is_product_page(url: str) -> bool:
+    """Check if a URL is likely a product detail page (not search/category/collection)."""
+    for pattern in _NON_PRODUCT_PATTERNS:
+        if pattern.search(url):
+            return False
+    return True
 
 
 def _build_site_restriction(platforms: list[str]) -> str:
@@ -127,6 +164,9 @@ class SerpAPIProvider(BaseSearchProvider):
             title = item.get("title", "").strip()
             snippet = item.get("snippet", "").strip()
             if not link or link in seen:
+                continue
+            if not is_product_page(link):
+                LOGGER.debug("跳過非商品頁：%s", link[:80])
                 continue
             platform = detect_platform(link)
             if allowed and platform not in allowed:

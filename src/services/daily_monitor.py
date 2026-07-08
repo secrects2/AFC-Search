@@ -121,6 +121,31 @@ class DailyMonitorService:
             screenshot_dir=screenshot_dir,
         )
 
+        # --- Name cross-validation ---
+        # If we got a title from the page, verify it matches the expected product
+        from src.matcher import match_score
+        title_score = 0
+        if extraction.title and extraction.parse_status == "ok":
+            title_score = match_score(candidate.product_name, extraction.title)
+            if title_score < 40:
+                LOGGER.warning(
+                    "名稱不符 (score=%d)：預期 [%s] 但頁面標題為 [%s]，標記為 excluded",
+                    title_score, candidate.product_name, extraction.title[:50],
+                )
+                self.db.update_candidate_status(candidate.id, "excluded")
+                self.db.insert_snapshot(
+                    candidate_id=candidate.id,
+                    product_id=candidate.product_id,
+                    price=extraction.price,
+                    suggested_price=candidate.suggested_price,
+                    is_violation=False,
+                    screenshot_path=extraction.screenshot_path,
+                    error_message=f"名稱不符 (score={title_score}): {extraction.title[:80]}",
+                    raw_data={"title_match_score": title_score, "page_title": extraction.title},
+                )
+                result.errors += 1
+                return extraction
+
         # Determine status
         suggested = candidate.suggested_price
         price = extraction.price
@@ -156,7 +181,11 @@ class DailyMonitorService:
             is_violation=is_violation,
             screenshot_path=extraction.screenshot_path,
             error_message=extraction.error_message,
-            raw_data=extraction.raw_data,
+            raw_data={
+                "evidence_text": extraction.raw_data.get("evidence_text", ""),
+                "title_match_score": title_score,
+                "page_title": extraction.title,
+            },
         )
 
         return extraction

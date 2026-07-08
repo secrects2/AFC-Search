@@ -16,7 +16,7 @@ from typing import Any
 
 from src.loader import Product
 from src.search.base import BaseSearchProvider, SearchResult
-from src.search.serp_api import detect_platform
+from src.search.serp_api import detect_platform, is_product_page
 
 LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +108,9 @@ class BraveSearchProvider(BaseSearchProvider):
             title = item.get("title", "").strip()
             snippet = item.get("description", "").strip()
             if not link or link in seen:
+                continue
+            if not is_product_page(link):
+                LOGGER.debug("跳過非商品頁：%s", link[:80])
                 continue
             platform = detect_platform(link)
             if allowed and platform not in allowed:
