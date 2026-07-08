@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="section-head">
+    <h2>候選連結 ({{ candidates|length }} 筆)</h2>
+  </div>
+
+  <details style="margin-bottom:16px">
+    <summary style="cursor:pointer;font-weight:bold">手動新增 URL</summary>
+    <form method="post" action="/candidates" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <select name="product_id" required style="min-width:200px">
+        <option value="">選擇商品</option>
+        {% for p in products %}
+          <option value="{{ p.id }}">{{ p.product_name }}</option>
+        {% endfor %}
+      </select>
+      <input type="url" name="url" placeholder="https://shopee.tw/..." required style="flex:1;min-width:300px">
+      <input type="text" name="platform" placeholder="平台（自動偵測）" style="width:100px">
+      <input type="text" name="seller" placeholder="賣家（選填）" style="width:120px">
+      <button class="primary" type="submit">新增</button>
+    </form>
+  </details>
+
+  {% if request.query_params.get('error') %}
+    <div class="notice danger">{{ request.query_params.get('error') }}</div>
+  {% endif %}
+
+  <table class="compact">
+    <thead>
+      <tr>
+        <th>商品</th>
+        <th>平台</th>
+        <th>標題</th>
+        <th>最新價格</th>
+        <th>狀態</th>
+        <th>來源</th>
+        <th>上次檢查</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in candidates %}
+      <tr class="{{ 'danger-row' if c.status == 'suspected_violation' else '' }}">
+        <td>{{ c.product_name[:15] }}</td>
+        <td>{{ c.platform }}</td>
+        <td><a href="{{ c.url }}" target="_blank" title="{{ c.url }}">{{ (c.title or c.url)[:30] }}</a></td>
+        <td>{{ c.last_price if c.last_price is not none else '-' }}</td>
+        <td>{{ c.status }}</td>
+        <td>{{ c.source_found_by }}</td>
+        <td>{{ c.last_checked_at[:16] if c.last_checked_at else '-' }}</td>
+        <td style="white-space:nowrap">
+          <form method="post" action="/candidates/{{ c.id }}/recheck" style="display:inline">
+            <button type="submit" class="small">重查</button>
+          </form>
+          <form method="post" action="/candidates/{{ c.id }}/disable" style="display:inline">
+            <button type="submit" class="small danger">停用</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8">尚無候選連結。請先執行「搜尋新連結」或手動新增。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-head">
+  <h2>待審商品</h2>
+</section>
+
+{% if error %}
+  <div class="notice error">{{ error }}</div>
+{% endif %}
+
+<nav class="filters status-filters">
+  <a class="{{ 'active' if not selected_status else '' }}" href="{{ url_for('review') }}">全部</a>
+  <a class="{{ 'active' if selected_status == 'pending_review' else '' }}" href="{{ url_for('review', status='pending_review') }}">待人工確認</a>
+  <a class="{{ 'active' if selected_status == 'missing_suggested_price' else '' }}" href="{{ url_for('review', status='missing_suggested_price') }}">缺建議售價</a>
+  <a class="{{ 'active' if selected_status == 'active' else '' }}" href="{{ url_for('review', status='active') }}">納入監控</a>
+  <a class="{{ 'active' if selected_status == 'rejected' else '' }}" href="{{ url_for('review', status='rejected') }}">不納入監控</a>
+</nav>
+
+<section class="panel">
+  <div class="table-wrap">
+    <table class="review-table">
+      <thead>
+        <tr>
+          <th>官網商品</th>
+          <th>狀態</th>
+          <th>系統對應</th>
+          <th>建議售價</th>
+          <th>分數</th>
+          <th>審核</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>
+              <div class="review-product">
+                {% if row.official_image_url %}
+                  <img class="product-thumb" src="{{ row.official_image_url }}" alt="">
+                {% endif %}
+                <div>
+                  <div class="product">{{ row.official_product_name }}</div>
+                  <a class="muted small-link" href="{{ row.official_product_url }}" target="_blank" rel="noreferrer">官網商品頁</a>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="badge {{ row.monitor_status }}">{{ row.status_label }}</span>
+              {% if row.review_status %}
+                <div class="muted small-text">{{ row.review_status }}</div>
+              {% endif %}
+            </td>
+            <td>{{ row.matched_db_product_name or "尚未確認" }}</td>
+            <td>{{ row.suggested_price or "未設定" }}</td>
+            <td>{{ row.match_score or 0 }}</td>
+            <td>
+              <form class="inline-review" method="post" action="{{ url_for('review_decision') }}">
+                <input type="hidden" name="official_product_name" value="{{ row.official_product_name }}">
+                <input type="hidden" name="official_product_url" value="{{ row.official_product_url }}">
+                <input type="hidden" name="return_status" value="{{ selected_status }}">
+                <div class="review-controls">
+                  <select name="matched_db_product_name">
+                    <option value="">不指定</option>
+                    {% for product in products %}
+                      <option value="{{ product }}" {% if product == row.matched_db_product_name %}selected{% endif %}>{{ product }}</option>
+                    {% endfor %}
+                  </select>
+                  <select name="decision">
+                    <option value="approved" {% if row.monitor_status == "active" %}selected{% endif %}>核准納入</option>
+                    <option value="pending_review" {% if row.monitor_status == "pending_review" %}selected{% endif %}>保留待審</option>
+                    <option value="missing_suggested_price" {% if row.monitor_status == "missing_suggested_price" %}selected{% endif %}>標記缺價</option>
+                    <option value="rejected" {% if row.monitor_status == "rejected" %}selected{% endif %}>不納入</option>
+                  </select>
+                  <input name="reviewer" value="{{ row.reviewer or 'admin' }}" placeholder="審核者">
+                  <input name="note" value="{{ row.note }}" placeholder="備註">
+                  <button type="submit">儲存</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="empty">目前沒有符合條件的官網商品</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

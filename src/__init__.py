@@ -1,0 +1,2 @@
+"""AFC price monitor package."""
+

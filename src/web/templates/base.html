@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AFC 價格監控</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>AFC 價格監控</h1>
+      <p>本機稽核儀表板</p>
+    </div>
+    <div style="display:flex;gap:8px">
+      <form method="post" action="/monitor/run">
+        <button class="primary" type="submit" {% if run_status.running %}disabled{% endif %}>
+          {% if run_status.running %}執行中{% else %}每日監測{% endif %}
+        </button>
+      </form>
+      <form method="post" action="/discovery/run">
+        <button class="secondary" type="submit" {% if run_status.running %}disabled{% endif %}>
+          搜尋新連結
+        </button>
+      </form>
+    </div>
+  </header>
+  <nav class="nav">
+    <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/">儀表板</a>
+    <a class="{{ 'active' if active == 'products' else '' }}" href="/products">商品清單</a>
+    <a class="{{ 'active' if active == 'candidates' else '' }}" href="/candidates">候選連結</a>
+    <a class="{{ 'active' if active == 'results' else '' }}" href="/monitor/results">監測結果</a>
+    <a class="{{ 'active' if active == 'violations' else '' }}" href="/monitor/violations">疑似破價</a>
+    <a class="{{ 'active' if active == 'api-usage' else '' }}" href="/api-usage">API 用量</a>
+  </nav>
+  <main>
+    {% if run_status.warning %}
+      <div class="notice">{{ run_status.warning }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

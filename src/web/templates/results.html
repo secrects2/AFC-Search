@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="section-head">
+    <h2>{{ title }} ({{ snapshots|length }} 筆)</h2>
+  </div>
+  <div style="margin-bottom:12px;display:flex;gap:8px">
+    <a class="button {{ 'primary' if not filter_status else '' }}" href="/monitor/results">全部</a>
+    <a class="button {{ 'primary' if filter_status == 'suspected_violation' else '' }}" href="/monitor/results?status=suspected_violation">疑似破價</a>
+    <a class="button {{ 'primary' if filter_status == 'price_unknown' else '' }}" href="/monitor/results?status=price_unknown">未抓到價格</a>
+    <a class="button {{ 'primary' if filter_status == 'error' else '' }}" href="/monitor/results?status=error">錯誤</a>
+    <a class="button {{ 'primary' if filter_status == 'normal' else '' }}" href="/monitor/results?status=normal">正常</a>
+  </div>
+  <table class="compact">
+    <thead>
+      <tr>
+        <th>商品名稱</th>
+        <th>平台</th>
+        <th>建議售價</th>
+        <th>抓到價格</th>
+        <th>價差</th>
+        <th>狀態</th>
+        <th>賣家</th>
+        <th>網址</th>
+        <th>檢查時間</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for s in snapshots %}
+      <tr class="{{ 'danger-row' if s.is_violation else '' }}">
+        <td>{{ s.product_name[:20] }}</td>
+        <td>{{ s.platform }}</td>
+        <td>{{ s.suggested_price if s.suggested_price is not none else '-' }}</td>
+        <td>{{ s.price if s.price is not none else '-' }}</td>
+        <td class="{{ 'danger' if s.price_diff is not none and s.price_diff < 0 else '' }}">
+          {{ s.price_diff if s.price_diff is not none else '-' }}
+        </td>
+        <td>{{ s.candidate_status }}</td>
+        <td>{{ s.seller[:10] }}</td>
+        <td><a href="{{ s.url }}" target="_blank">連結</a></td>
+        <td>{{ s.checked_at[:16] if s.checked_at else '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9">尚無監測結果</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,30 @@
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>商品</th>
+        <th>平台</th>
+        <th>建議售價</th>
+        <th>抓到價格</th>
+        <th>狀態</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>
+            <div class="product">{{ row.product_name }}</div>
+            <div class="muted truncate">{{ row.found_title }}</div>
+          </td>
+          <td>{{ row.platform }}</td>
+          <td>{{ row.suggested_price }}</td>
+          <td>{{ row.found_price or "-" }}</td>
+          <td><span class="badge {{ row.violation_status }}">{{ row.violation_status }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">尚無資料</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+

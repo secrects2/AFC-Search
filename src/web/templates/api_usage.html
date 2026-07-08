@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="section-head">
+    <h2>API 搜尋用量</h2>
+  </div>
+  <section class="stats">
+    <div class="stat">
+      <span>今日已用</span>
+      <strong>{{ budget.daily_used }} / {{ budget.daily_budget }}</strong>
+    </div>
+    <div class="stat">
+      <span>今日剩餘</span>
+      <strong>{{ budget.daily_remaining }}</strong>
+    </div>
+    <div class="stat">
+      <span>本月已用</span>
+      <strong>{{ budget.monthly_used }} / {{ budget.monthly_budget }}</strong>
+    </div>
+    <div class="stat">
+      <span>本月剩餘</span>
+      <strong>{{ budget.monthly_remaining }}</strong>
+    </div>
+  </section>
+</section>
+
+<section class="panel" style="margin-top:16px">
+  <div class="section-head">
+    <h2>最近 API 呼叫紀錄</h2>
+  </div>
+  <table class="compact">
+    <thead>
+      <tr>
+        <th>時間</th>
+        <th>供應商</th>
+        <th>查詢</th>
+        <th>結果數</th>
+        <th>用途</th>
+        <th>成功</th>
+        <th>錯誤</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for log in logs %}
+      <tr>
+        <td>{{ log.used_at[:16] if log.used_at else '-' }}</td>
+        <td>{{ log.provider }}</td>
+        <td>{{ log.query[:30] }}</td>
+        <td>{{ log.result_count }}</td>
+        <td>{{ log.purpose }}</td>
+        <td>{{ '✅' if log.success else '❌' }}</td>
+        <td>{{ log.error_message[:30] if log.error_message else '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">尚無 API 使用紀錄</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

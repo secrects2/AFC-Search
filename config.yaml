@@ -1,0 +1,38 @@
+match_threshold: 85
+price_tolerance: 0
+request_delay_seconds: 3
+request_timeout_seconds: 20
+request_retries: 2
+max_results_per_product: 10
+enable_ocr: true
+enable_screenshot: true
+enable_image_match: true
+image_match_threshold: 88
+headless: true
+platforms:
+  - shopee
+  - momo
+  - yahoo
+  - pchome
+  - ruten
+
+# 搜尋設定
+# API key 請設定在 .env 檔案中
+# SerpAPI: https://serpapi.com/signup (免費 250次/月)
+# Brave: https://api.search.brave.com/ (免費 ~1000次/月)
+search_cache_hours: 24
+
+notification:
+  enabled: false
+  only_when_violation: true
+  email:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 587
+    username: ""
+    password: ""
+    to: []
+  line:
+    enabled: false
+    channel_access_token: ""
+    user_ids: []

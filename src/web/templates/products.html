@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="section-head">
+    <h2>商品清單 ({{ products|length }} 筆)</h2>
+  </div>
+  <form method="post" action="/products/import" enctype="multipart/form-data" style="margin-bottom:16px">
+    <label>匯入 CSV：</label>
+    <input type="file" name="file" accept=".csv" required>
+    <button class="primary" type="submit">匯入</button>
+  </form>
+  {% if request.query_params.get('message') %}
+    <div class="notice">{{ request.query_params.get('message') }}</div>
+  {% endif %}
+  <table class="compact">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>商品名稱</th>
+        <th>建議售價</th>
+        <th>品牌</th>
+        <th>優先級</th>
+        <th>啟用</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in products %}
+      <tr>
+        <td>{{ p.id }}</td>
+        <td><a href="/candidates?product_id={{ p.id }}">{{ p.product_name }}</a></td>
+        <td>{{ p.suggested_price if p.suggested_price is not none else '-' }}</td>
+        <td>{{ p.brand }}</td>
+        <td>{{ p.priority }}</td>
+        <td>{{ '✅' if p.is_active else '❌' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

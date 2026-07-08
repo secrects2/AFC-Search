@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="stats">
+  <div class="stat">
+    <span>最近監測</span>
+    <strong>{{ summary.last_check_time or "尚無資料" }}</strong>
+  </div>
+  <div class="stat">
+    <span>監控商品數</span>
+    <strong>{{ summary.total_products }}</strong>
+  </div>
+  <div class="stat danger">
+    <span>疑似破價</span>
+    <strong>{{ summary.violations }}</strong>
+  </div>
+  <div class="stat warning">
+    <span>未抓到價格</span>
+    <strong>{{ summary.price_unknown }}</strong>
+  </div>
+  <div class="stat">
+    <span>追蹤連結數</span>
+    <strong>{{ summary.active_candidates }}</strong>
+  </div>
+</section>
+
+<section class="toolbar">
+  <div>
+    <div class="eyebrow">執行狀態</div>
+    <div class="status-line">{{ run_status.message }}</div>
+  </div>
+  <div class="downloads">
+    <a class="button" href="/downloads/daily_report.xlsx">每日報表</a>
+    <a class="button" href="/downloads/suspected_violations.xlsx">破價報表</a>
+  </div>
+</section>
+
+<section class="stats" style="margin-top:16px">
+  <div class="stat">
+    <span>今日搜尋 API</span>
+    <strong>{{ budget.daily_used }} / {{ budget.daily_budget }}</strong>
+  </div>
+  <div class="stat">
+    <span>本月搜尋 API</span>
+    <strong>{{ budget.monthly_used }} / {{ budget.monthly_budget }}</strong>
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <div class="section-head">
+      <h2>疑似破價</h2>
+      <a href="/monitor/violations">查看全部</a>
+    </div>
+    <table class="compact">
+      <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>價差</th></tr></thead>
+      <tbody>
+      {% for s in violations %}
+        <tr>
+          <td>{{ s.product_name[:20] }}</td>
+          <td>{{ s.platform }}</td>
+          <td>{{ s.price }}</td>
+          <td class="danger">{{ s.price_diff }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">暫無疑似破價</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <div class="section-head">
+      <h2>最近結果</h2>
+      <a href="/monitor/results">查看全部</a>
+    </div>
+    <table class="compact">
+      <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>狀態</th></tr></thead>
+      <tbody>
+      {% for s in recent %}
+        <tr>
+          <td>{{ s.product_name[:20] }}</td>
+          <td>{{ s.platform }}</td>
+          <td>{{ s.price if s.price is not none else '-' }}</td>
+          <td>{{ s.candidate_status }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">尚無監測結果，請先執行每日監測</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

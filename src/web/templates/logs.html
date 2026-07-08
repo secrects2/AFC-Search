@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid">
+  <div class="panel">
+    <div class="section-head"><h2>scheduler.log</h2></div>
+    <pre class="log">{% for line in scheduler_log %}{{ line }}
+{% else %}尚無 scheduler.log{% endfor %}</pre>
+  </div>
+  <div class="panel">
+    <div class="section-head"><h2>run.log</h2></div>
+    <pre class="log">{% for line in run_log %}{{ line }}
+{% else %}尚無 run.log{% endfor %}</pre>
+  </div>
+  <div class="panel">
+    <div class="section-head"><h2>dashboard_run.log</h2></div>
+    <pre class="log">{% for line in dashboard_log %}{{ line }}
+{% else %}尚無 dashboard_run.log{% endfor %}</pre>
+  </div>
+</section>
+{% endblock %}
+
