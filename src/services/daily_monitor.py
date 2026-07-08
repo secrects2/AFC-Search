@@ -146,6 +146,46 @@ class DailyMonitorService:
                 result.errors += 1
                 return extraction
 
+        # --- Image cross-validation ---
+        image_score = 0
+        if (
+            self.config.enable_image_match
+            and extraction.screenshot_path
+            and extraction.parse_status == "ok"
+        ):
+            from src.image_matcher import average_hash_file, hamming_similarity
+            product = self.db.get_product(candidate.product_id)
+            if product and product.official_image_hash:
+                try:
+                    screen_hash = average_hash_file(Path(extraction.screenshot_path))
+                    image_score = hamming_similarity(product.official_image_hash, screen_hash)
+                    threshold = int(self.config.image_match_threshold or 80)
+                    
+                    if image_score < threshold:
+                        LOGGER.warning(
+                            "圖片不符 (score=%d < %d)：商品 [%s] 截圖比對失敗，標記為 excluded",
+                            image_score, threshold, candidate.product_name,
+                        )
+                        self.db.update_candidate_status(candidate.id, "excluded")
+                        self.db.insert_snapshot(
+                            candidate_id=candidate.id,
+                            product_id=candidate.product_id,
+                            price=extraction.price,
+                            suggested_price=candidate.suggested_price,
+                            is_violation=False,
+                            screenshot_path=extraction.screenshot_path,
+                            error_message=f"圖片不符 (score={image_score})",
+                            raw_data={
+                                "title_match_score": title_score,
+                                "image_match_score": image_score,
+                                "page_title": extraction.title
+                            },
+                        )
+                        result.errors += 1
+                        return extraction
+                except Exception as exc:
+                    LOGGER.warning("圖片比對失敗: %s", exc)
+
         # Determine status
         suggested = candidate.suggested_price
         price = extraction.price

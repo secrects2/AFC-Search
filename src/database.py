@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS products (
     exclude_keywords TEXT DEFAULT '',
     priority INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT 1,
+    official_image_url TEXT DEFAULT '',
+    official_image_path TEXT DEFAULT '',
+    official_image_hash TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -100,6 +103,9 @@ class ProductRow:
     exclude_keywords: str = ""
     priority: int = 0
     is_active: bool = True
+    official_image_url: str = ""
+    official_image_path: str = ""
+    official_image_hash: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -197,6 +203,11 @@ class Database:
         conn = self._connect()
         try:
             conn.executescript(SCHEMA_SQL)
+            # Migration: add image columns if missing
+            existing = {r[1] for r in conn.execute('PRAGMA table_info(products)').fetchall()}
+            for col in ('official_image_url', 'official_image_path', 'official_image_hash'):
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -212,6 +223,9 @@ class Database:
         exclude_keywords: str = "",
         priority: int = 0,
         is_active: bool = True,
+        official_image_url: str = "",
+        official_image_path: str = "",
+        official_image_hash: str = "",
     ) -> int:
         """Insert or update a product by name. Returns product id."""
         with self._cursor() as (conn, cur):
@@ -224,19 +238,26 @@ class Database:
             if row:
                 cur.execute(
                     """UPDATE products SET suggested_price=?, brand=?, keywords=?,
-                       exclude_keywords=?, priority=?, is_active=?, updated_at=?
+                       exclude_keywords=?, priority=?, is_active=?,
+                       official_image_url=?, official_image_path=?, official_image_hash=?,
+                       updated_at=?
                        WHERE id=?""",
                     (suggested_price, brand, keywords, exclude_keywords,
-                     priority, is_active, now, row["id"]),
+                     priority, is_active, official_image_url, official_image_path,
+                     official_image_hash, now, row["id"]),
                 )
                 return row["id"]
             cur.execute(
                 """INSERT INTO products
                    (product_name, suggested_price, brand, keywords,
-                    exclude_keywords, priority, is_active, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    exclude_keywords, priority, is_active,
+                    official_image_url, official_image_path, official_image_hash,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (product_name, suggested_price, brand, keywords,
-                 exclude_keywords, priority, is_active, now, now),
+                 exclude_keywords, priority, is_active,
+                 official_image_url, official_image_path, official_image_hash,
+                 now, now),
             )
             return cur.lastrowid  # type: ignore[return-value]
 
@@ -257,6 +278,7 @@ class Database:
 
     @staticmethod
     def _to_product(row: sqlite3.Row) -> ProductRow:
+        keys = row.keys()
         return ProductRow(
             id=row["id"],
             product_name=row["product_name"],
@@ -266,6 +288,9 @@ class Database:
             exclude_keywords=row["exclude_keywords"] or "",
             priority=row["priority"] or 0,
             is_active=bool(row["is_active"]),
+            official_image_url=row["official_image_url"] if "official_image_url" in keys else "",
+            official_image_path=row["official_image_path"] if "official_image_path" in keys else "",
+            official_image_hash=row["official_image_hash"] if "official_image_hash" in keys else "",
             created_at=row["created_at"] or "",
             updated_at=row["updated_at"] or "",
         )

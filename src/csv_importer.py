@@ -13,12 +13,15 @@ from src.search.serp_api import detect_platform
 LOGGER = logging.getLogger(__name__)
 
 # Column aliases for auto-mapping
-PRODUCT_NAME_ALIASES = {"product_name", "商品名稱", "名稱", "品名"}
+PRODUCT_NAME_ALIASES = {"product_name", "商品名稱", "名稱", "品名", "official_product_name"}
 PRICE_ALIASES = {"suggested_price", "建議售價", "售價", "定價", "price"}
 BRAND_ALIASES = {"brand", "品牌"}
 KEYWORDS_ALIASES = {"keywords", "關鍵字"}
 EXCLUDE_ALIASES = {"exclude_keywords", "排除字", "排除關鍵字"}
 SKU_ALIASES = {"sku_code", "sku", "品號", "商品編號"}
+IMAGE_URL_ALIASES = {"official_image_url"}
+IMAGE_PATH_ALIASES = {"official_image_path"}
+IMAGE_HASH_ALIASES = {"official_image_hash"}
 
 # Bundle keywords to skip
 BUNDLE_KEYWORDS = {"套組", "組合", "二入組", "三入組", "禮盒", "超值組"}
@@ -56,6 +59,9 @@ def import_products_csv(db: Database, csv_path: Path) -> dict[str, int]:
     kw_idx = _find_column(header, KEYWORDS_ALIASES)
     excl_idx = _find_column(header, EXCLUDE_ALIASES)
     sku_idx = _find_column(header, SKU_ALIASES)
+    img_url_idx = _find_column(header, IMAGE_URL_ALIASES)
+    img_path_idx = _find_column(header, IMAGE_PATH_ALIASES)
+    img_hash_idx = _find_column(header, IMAGE_HASH_ALIASES)
 
     if name_idx < 0:
         raise ValueError(f"找不到商品名稱欄位。Header: {header}")
@@ -80,6 +86,9 @@ def import_products_csv(db: Database, csv_path: Path) -> dict[str, int]:
             brand = row[brand_idx].strip() if brand_idx >= 0 and len(row) > brand_idx else ""
             keywords = row[kw_idx].strip() if kw_idx >= 0 and len(row) > kw_idx else ""
             exclude = row[excl_idx].strip() if excl_idx >= 0 and len(row) > excl_idx else ""
+            img_url = row[img_url_idx].strip() if img_url_idx >= 0 and len(row) > img_url_idx else ""
+            img_path = row[img_path_idx].strip() if img_path_idx >= 0 and len(row) > img_path_idx else ""
+            img_hash = row[img_hash_idx].strip() if img_hash_idx >= 0 and len(row) > img_hash_idx else ""
 
             if price is None:
                 LOGGER.warning("Row %d: 建議售價為空或非數字：%s", row_num, name)
@@ -90,6 +99,9 @@ def import_products_csv(db: Database, csv_path: Path) -> dict[str, int]:
                 brand=brand,
                 keywords=keywords,
                 exclude_keywords=exclude,
+                official_image_url=img_url,
+                official_image_path=img_path,
+                official_image_hash=img_hash,
             )
             imported += 1
         except Exception as exc:
