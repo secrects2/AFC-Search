@@ -238,7 +238,7 @@ class DailyMonitorService:
         price = extraction.price
         is_violation = False
 
-        if extraction.parse_status in ("error", "page_blocked", "timeout"):
+        if extraction.parse_status in ("error", "page_blocked", "timeout", "language_required"):
             status = "error"
             result.errors += 1
         elif price is None:
@@ -252,12 +252,21 @@ class DailyMonitorService:
             status = "normal"
             result.normal += 1
 
-        # Update candidate
-        self.db.update_candidate_status(
-            candidate_id=candidate.id,
-            status=status,
-            last_price=price,
-        )
+        # Preserve takedown_notified: keep tracking but don't change the status
+        current_status = candidate.status if hasattr(candidate, 'status') else ''
+        if current_status == 'takedown_notified':
+            # Keep takedown_notified, but still record the snapshot and violation
+            self.db.update_candidate_status(
+                candidate_id=candidate.id,
+                status='takedown_notified',
+                last_price=price,
+            )
+        else:
+            self.db.update_candidate_status(
+                candidate_id=candidate.id,
+                status=status,
+                last_price=price,
+            )
 
         # Insert snapshot
         self.db.insert_snapshot(
@@ -333,15 +342,33 @@ class DailyMonitorService:
             return extraction
         if extraction.price is not None and extraction.parse_status == "ok":
             return extraction
-        if extraction.parse_status not in {"page_blocked", "price_not_found", "error", "timeout"}:
+        if extraction.parse_status not in {
+            "page_blocked",
+            "price_not_found",
+            "price_unknown",
+            "search_failed",
+            "error",
+            "timeout",
+            "language_required",
+        }:
             return extraction
 
         from src.search.findprice_api import find_best_findprice_listing
 
-        keyword = candidate.product_name or candidate.title
-        keyword_lower = keyword.lower()
-        if "afc" not in keyword_lower and "genki" not in keyword_lower:
-            keyword = f"AFC {keyword}"
+        # Use product keywords if available (from DB), otherwise fall back to name
+        product_row = self.db.get_product(candidate.product_id)
+        if product_row and product_row.keywords:
+            first_kw = product_row.keywords.split(",")[0].strip()
+            brand_prefix = product_row.brand or "AFC"
+            if brand_prefix.lower() in first_kw.lower():
+                keyword = first_kw
+            else:
+                keyword = f"{brand_prefix} {first_kw}"
+        else:
+            keyword = candidate.product_name or candidate.title
+            keyword_lower = keyword.lower()
+            if "afc" not in keyword_lower and "genki" not in keyword_lower:
+                keyword = f"AFC {keyword}"
 
         listing = find_best_findprice_listing(
             keyword=keyword,

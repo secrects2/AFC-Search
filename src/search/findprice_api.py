@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
 from src.loader import Product, parse_price_value
-from src.matcher import match_score
+from src.matcher import match_score, normalize_name
 from src.search.base import BaseSearchProvider, SearchResult
 
 LOGGER = logging.getLogger(__name__)
@@ -165,6 +165,88 @@ def search_findprice_listings(
     return listings
 
 
+def _clean_query_text(value: str) -> str:
+    text = re.sub(r"https?://\S+", " ", value or "")
+    text = re.sub(r"[【】〖〗\[\]（）()|｜,，、/]+", " ", text)
+    text = re.sub(r"\d+\s*(粒|錠|顆|包|盒|瓶|日份|個月份)", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _query_variants(keyword: str, expected_title: str = "") -> list[str]:
+    """Build conservative FindPrice query variants for one product."""
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        value = _clean_query_text(value)
+        if value and value not in variants:
+            variants.append(value)
+
+    add(keyword)
+    if expected_title:
+        add(expected_title)
+
+    for value in (keyword, expected_title):
+        cleaned = _clean_query_text(value)
+        if not cleaned:
+            continue
+        without_afc = re.sub(r"\bafc\b", " ", cleaned, flags=re.IGNORECASE)
+        without_afc = re.sub(r"\s+", " ", without_afc).strip()
+        add(without_afc)
+
+        normalized = normalize_name(cleaned)
+        if normalized and len(normalized) >= 3:
+            add(normalized)
+            add(f"AFC {normalized}")
+
+    return variants[:6]
+
+
+def _dedupe_listings(listings: list[FindPriceListing]) -> list[FindPriceListing]:
+    deduped: list[FindPriceListing] = []
+    seen: set[tuple[str, str, str]] = set()
+    for listing in listings:
+        key = (listing.url, listing.title, listing.platform)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(listing)
+    return deduped
+
+
+def _essential_terms(value: str) -> list[str]:
+    """Return must-have terms for AFC product families with ambiguous names."""
+    normalized = normalize_name(value)
+    if not normalized:
+        return []
+
+    for marker in ("新究極", "究極", "菁鑽"):
+        index = normalized.find(marker)
+        if index < 0:
+            continue
+        tail = normalized[index + len(marker):]
+        if marker == "菁鑽" and tail.startswith("新"):
+            tail = tail[1:]
+        terms = [marker]
+        if len(tail) >= 2:
+            terms.append(tail)
+        return terms
+
+    return []
+
+
+def _passes_essential_terms(
+    listing: FindPriceListing,
+    keyword: str,
+    expected_title: str = "",
+) -> bool:
+    terms = _essential_terms(keyword) or _essential_terms(expected_title)
+    if not terms:
+        return True
+    title_norm = normalize_name(listing.title)
+    return all(term in title_norm for term in terms)
+
+
 def find_best_findprice_listing(
     keyword: str,
     expected_title: str = "",
@@ -172,29 +254,60 @@ def find_best_findprice_listing(
     min_score: int = 50,
     timeout: int = 15,
 ) -> FindPriceListing | None:
-    listings = [
-        listing
-        for listing in search_findprice_listings(keyword, max_results=30, timeout=timeout)
-        if listing.price is not None
-    ]
+    listings: list[FindPriceListing] = []
+    for query in _query_variants(keyword, expected_title):
+        listings.extend(
+            listing
+            for listing in search_findprice_listings(
+                query,
+                max_results=30,
+                timeout=timeout,
+                delay_seconds=0.2,
+            )
+            if listing.price is not None
+        )
+    listings = _dedupe_listings(listings)
     if not listings:
         return None
 
-    scored: list[tuple[int, FindPriceListing]] = []
+    scored: list[tuple[int, int, FindPriceListing]] = []
     for listing in listings:
+        if not _passes_essential_terms(listing, keyword, expected_title):
+            continue
         base_score = match_score(keyword, listing.title)
         if expected_title:
             base_score = max(base_score, match_score(expected_title, listing.title))
-        if preferred_platform and listing.platform == preferred_platform:
-            base_score += 20
-        scored.append((base_score, listing))
+        if base_score < min_score:
+            continue
+        platform_bonus = 20 if preferred_platform and listing.platform == preferred_platform else 0
+        scored.append((base_score + platform_bonus, base_score, listing))
+
+    if not scored:
+        best = max(
+            listings,
+            key=lambda listing: max(
+                match_score(keyword, listing.title),
+                match_score(expected_title, listing.title) if expected_title else 0,
+            ),
+        )
+        LOGGER.info(
+            "FindPrice no match above threshold: keyword=%s best_title=%s",
+            keyword,
+            best.title,
+        )
+        return None
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    best_score, best = scored[0]
-    if best_score < min_score:
+    rank_score, base_score, best = scored[0]
+    if preferred_platform and best.platform != preferred_platform:
+        preferred = [item for item in scored if item[2].platform == preferred_platform]
+        if preferred and preferred[0][1] >= base_score - 10:
+            rank_score, base_score, best = preferred[0]
+
+    if base_score < min_score:
         LOGGER.info(
             "FindPrice best match below threshold: score=%d keyword=%s title=%s",
-            best_score,
+            base_score,
             keyword,
             best.title,
         )
