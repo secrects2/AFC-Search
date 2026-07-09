@@ -95,6 +95,92 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             tmp_path.unlink(missing_ok=True)
         return RedirectResponse(url=f"/products?message={message}", status_code=303)
 
+    @app.post("/products/add")
+    async def add_product(
+        request: Request,
+        product_name: str = Form(...),
+        suggested_price: float = Form(0),
+        brand: str = Form(""),
+        keywords: str = Form(""),
+        exclude_keywords: str = Form(""),
+        priority: int = Form(0),
+    ):
+        """Add a new product."""
+        if not product_name.strip():
+            return RedirectResponse(url="/products?message=商品名稱不可為空", status_code=303)
+        db.upsert_product(
+            product_name=product_name.strip(),
+            suggested_price=suggested_price or None,
+            brand=brand.strip(),
+            keywords=keywords.strip(),
+            exclude_keywords=exclude_keywords.strip(),
+            priority=priority,
+            is_active=True,
+        )
+        return RedirectResponse(url=f"/products?message=已新增商品：{product_name}", status_code=303)
+
+    @app.post("/products/{product_id}/update")
+    async def update_product(
+        product_id: int,
+        product_name: str = Form(...),
+        suggested_price: float = Form(0),
+        brand: str = Form(""),
+        keywords: str = Form(""),
+        exclude_keywords: str = Form(""),
+        priority: int = Form(0),
+        is_active: int = Form(0),
+    ):
+        """Update an existing product."""
+        existing = db.get_product(product_id)
+        if not existing:
+            return RedirectResponse(url="/products?message=找不到商品", status_code=303)
+        db.upsert_product(
+            product_name=product_name.strip(),
+            suggested_price=suggested_price or None,
+            brand=brand.strip(),
+            keywords=keywords.strip(),
+            exclude_keywords=exclude_keywords.strip(),
+            priority=priority,
+            is_active=bool(is_active),
+            official_image_url=existing.official_image_url,
+            official_image_path=existing.official_image_path,
+            official_image_hash=existing.official_image_hash,
+        )
+        return RedirectResponse(url="/products?message=已更新商品", status_code=303)
+
+    @app.post("/products/{product_id}/delete")
+    async def delete_product(product_id: int):
+        """Delete a product and all related data."""
+        product = db.get_product(product_id)
+        name = product.product_name if product else "Unknown"
+        deleted = db.delete_product(product_id)
+        if deleted:
+            msg = f"已刪除商品：{name}"
+        else:
+            msg = "找不到商品"
+        return RedirectResponse(url=f"/products?message={msg}", status_code=303)
+
+    @app.post("/products/{product_id}/toggle")
+    async def toggle_product(product_id: int):
+        """Toggle a product's active status."""
+        product = db.get_product(product_id)
+        if not product:
+            return RedirectResponse(url="/products?message=找不到商品", status_code=303)
+        db.upsert_product(
+            product_name=product.product_name,
+            suggested_price=product.suggested_price,
+            brand=product.brand,
+            keywords=product.keywords,
+            exclude_keywords=product.exclude_keywords,
+            priority=product.priority,
+            is_active=not product.is_active,
+            official_image_url=product.official_image_url,
+            official_image_path=product.official_image_path,
+            official_image_hash=product.official_image_hash,
+        )
+        status = "啟用" if not product.is_active else "停用"
+        return RedirectResponse(url=f"/products?message=已{status}：{product.product_name}", status_code=303)
+
     # -- Candidates ---------------------------------------------------------
 
     @app.get("/candidates", response_class=HTMLResponse)

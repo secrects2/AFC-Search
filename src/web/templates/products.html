@@ -4,37 +4,163 @@
   <div class="section-head">
     <h2>商品清單 ({{ products|length }} 筆)</h2>
   </div>
-  <form method="post" action="/products/import" enctype="multipart/form-data" style="margin-bottom:16px">
-    <label>匯入 CSV：</label>
-    <input type="file" name="file" accept=".csv" required>
-    <button class="primary" type="submit">匯入</button>
-  </form>
+
   {% if request.query_params.get('message') %}
     <div class="notice">{{ request.query_params.get('message') }}</div>
   {% endif %}
-  <table class="compact">
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>商品名稱</th>
-        <th>建議售價</th>
-        <th>品牌</th>
-        <th>優先級</th>
-        <th>啟用</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for p in products %}
-      <tr>
-        <td>{{ p.id }}</td>
-        <td><a href="/candidates?product_id={{ p.id }}">{{ p.product_name }}</a></td>
-        <td>{{ p.suggested_price if p.suggested_price is not none else '-' }}</td>
-        <td>{{ p.brand }}</td>
-        <td>{{ p.priority }}</td>
-        <td>{{ '✅' if p.is_active else '❌' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+
+  <!-- CSV Import -->
+  <details style="margin-bottom:18px">
+    <summary style="cursor:pointer;color:var(--accent);font-weight:600">📁 匯入 CSV</summary>
+    <form method="post" action="/products/import" enctype="multipart/form-data" style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <input type="file" name="file" accept=".csv" required>
+      <button class="primary small" type="submit">匯入</button>
+    </form>
+  </details>
+
+  <!-- Add New Product -->
+  <details id="add-form" style="margin-bottom:18px">
+    <summary style="cursor:pointer;color:var(--ok);font-weight:600">➕ 新增商品</summary>
+    <form method="post" action="/products/add" class="product-form" style="margin-top:12px">
+      <div class="product-form-grid">
+        <label>
+          <span>商品名稱 <span style="color:var(--danger)">*</span></span>
+          <input type="text" name="product_name" required placeholder="例：AFC DHA魚油">
+        </label>
+        <label>
+          <span>建議售價</span>
+          <input type="number" name="suggested_price" step="0.01" placeholder="1380">
+        </label>
+        <label>
+          <span>品牌</span>
+          <input type="text" name="brand" placeholder="AFC">
+        </label>
+        <label>
+          <span>搜尋關鍵字</span>
+          <input type="text" name="keywords" placeholder="DHA,魚油">
+        </label>
+        <label>
+          <span>排除關鍵字</span>
+          <input type="text" name="exclude_keywords" placeholder="DHC,其他品牌">
+        </label>
+        <label>
+          <span>優先級</span>
+          <input type="number" name="priority" value="0">
+        </label>
+      </div>
+      <div style="margin-top:12px">
+        <button class="primary" type="submit">新增商品</button>
+      </div>
+    </form>
+  </details>
+
+  <!-- Products Table -->
+  <div class="table-wrap">
+    <table class="compact" id="products-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>商品名稱</th>
+          <th>建議售價</th>
+          <th>品牌</th>
+          <th>關鍵字</th>
+          <th>排除關鍵字</th>
+          <th>優先級</th>
+          <th>啟用</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in products %}
+        <!-- Display row -->
+        <tr id="row-{{ p.id }}">
+          <td>{{ p.id }}</td>
+          <td class="product"><a href="/candidates?product_id={{ p.id }}">{{ p.product_name }}</a></td>
+          <td>{{ p.suggested_price if p.suggested_price is not none else '-' }}</td>
+          <td>{{ p.brand or '-' }}</td>
+          <td class="truncate" style="max-width:140px">{{ p.keywords or '-' }}</td>
+          <td class="truncate" style="max-width:140px">{{ p.exclude_keywords or '-' }}</td>
+          <td>{{ p.priority }}</td>
+          <td>
+            <form method="post" action="/products/{{ p.id }}/toggle" style="display:inline">
+              <button type="submit" class="small {{ 'primary' if p.is_active else 'danger-button' }}" title="點擊切換啟用/停用">
+                {{ '✅ 啟用' if p.is_active else '❌ 停用' }}
+              </button>
+            </form>
+          </td>
+          <td style="white-space:nowrap">
+            <button class="small secondary" onclick="toggleEdit({{ p.id }})" title="編輯">✏️</button>
+            <form method="post" action="/products/{{ p.id }}/delete" style="display:inline"
+                  onsubmit="return confirm('確定要刪除「{{ p.product_name }}」及其所有候選連結與監測紀錄嗎？')">
+              <button type="submit" class="small danger-button" title="刪除">🗑️</button>
+            </form>
+          </td>
+        </tr>
+        <!-- Edit row (hidden by default) -->
+        <tr id="edit-{{ p.id }}" style="display:none;background:#f8fafb">
+          <form method="post" action="/products/{{ p.id }}/update">
+            <td>{{ p.id }}</td>
+            <td><input type="text" name="product_name" value="{{ p.product_name }}" required style="width:100%;min-width:180px"></td>
+            <td><input type="number" name="suggested_price" value="{{ p.suggested_price or '' }}" step="0.01" style="width:90px"></td>
+            <td><input type="text" name="brand" value="{{ p.brand }}" style="width:80px"></td>
+            <td><input type="text" name="keywords" value="{{ p.keywords }}" style="width:120px"></td>
+            <td><input type="text" name="exclude_keywords" value="{{ p.exclude_keywords }}" style="width:120px"></td>
+            <td><input type="number" name="priority" value="{{ p.priority }}" style="width:60px"></td>
+            <td>
+              <select name="is_active" style="min-height:34px">
+                <option value="1" {{ 'selected' if p.is_active else '' }}>啟用</option>
+                <option value="0" {{ 'selected' if not p.is_active else '' }}>停用</option>
+              </select>
+            </td>
+            <td style="white-space:nowrap">
+              <button type="submit" class="small primary" title="儲存">💾</button>
+              <button type="button" class="small" onclick="toggleEdit({{ p.id }})" title="取消">✖️</button>
+            </td>
+          </form>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
+
+<style>
+  .product-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .product-form-grid label {
+    display: grid;
+    gap: 4px;
+  }
+  .product-form-grid label span {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .product-form-grid input {
+    width: 100%;
+  }
+  #products-table input,
+  #products-table select {
+    min-height: 32px;
+    padding: 4px 6px;
+    font-size: 13px;
+  }
+</style>
+
+<script>
+function toggleEdit(id) {
+  const displayRow = document.getElementById('row-' + id);
+  const editRow = document.getElementById('edit-' + id);
+  if (editRow.style.display === 'none') {
+    displayRow.style.display = 'none';
+    editRow.style.display = '';
+  } else {
+    displayRow.style.display = '';
+    editRow.style.display = 'none';
+  }
+}
+</script>
 {% endblock %}

@@ -276,6 +276,24 @@ class Database:
             cur.execute(sql)
             return [self._to_product(r) for r in cur.fetchall()]
 
+    def delete_product(self, product_id: int) -> bool:
+        """Delete a product and its related candidates/snapshots. Returns True if deleted."""
+        with self._cursor() as (conn, cur):
+            cur.execute("SELECT id FROM products WHERE id=?", (product_id,))
+            if not cur.fetchone():
+                return False
+            # Delete related snapshots first (FK constraint)
+            cur.execute(
+                "DELETE FROM price_snapshots WHERE candidate_id IN "
+                "(SELECT id FROM product_candidates WHERE product_id=?)",
+                (product_id,),
+            )
+            # Delete related candidates
+            cur.execute("DELETE FROM product_candidates WHERE product_id=?", (product_id,))
+            # Delete the product
+            cur.execute("DELETE FROM products WHERE id=?", (product_id,))
+            return True
+
     @staticmethod
     def _to_product(row: sqlite3.Row) -> ProductRow:
         keys = row.keys()
