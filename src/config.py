@@ -27,6 +27,13 @@ class AppConfig:
     brave_api_key: str = ""
     search_cache_hours: int = 24
 
+    # Shopee provider settings
+    shopee_provider: str = "chain"
+    shopee_third_party_api_url: str = ""
+    shopee_third_party_api_key: str = ""
+    shopee_timeout_seconds: int = 60
+    shopee_max_retries: int = 1
+
 
 def _parse_scalar(value: str) -> Any:
     value = value.strip()
@@ -122,5 +129,21 @@ def load_config(path: Path) -> AppConfig:
         config.serpapi_api_key = env_serpapi
     if env_brave and env_brave != "YOUR_BRAVE_KEY_HERE":
         config.brave_api_key = env_brave
+
+    # Shopee provider env vars — set into os.environ so provider chain can read them
+    for env_key, attr_name in [
+        ("SHOPEE_PROVIDER", "shopee_provider"),
+        ("SHOPEE_THIRD_PARTY_API_URL", "shopee_third_party_api_url"),
+        ("SHOPEE_THIRD_PARTY_API_KEY", "shopee_third_party_api_key"),
+        ("SHOPEE_TIMEOUT_SECONDS", "shopee_timeout_seconds"),
+        ("SHOPEE_MAX_RETRIES", "shopee_max_retries"),
+    ]:
+        env_val = os.environ.get(env_key, "").strip()
+        if env_val:
+            setattr(config, attr_name, type(getattr(config, attr_name))(env_val))
+            os.environ.setdefault(env_key, env_val)
+        else:
+            # Push config defaults into env for provider chain to read
+            os.environ.setdefault(env_key, str(getattr(config, attr_name)))
 
     return config

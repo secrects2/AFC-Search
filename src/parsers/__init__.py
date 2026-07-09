@@ -23,7 +23,7 @@ def get_parser(platform: str, url: str, config: AppConfig) -> BaseParser:
         return YahooParser(config)
     if "pchome" in normalized or "pchome" in host:
         return PChomeParser(config)
-    if "ruten" in normalized or "ruten" in host:
+    if normalized == "ruten" or "ruten.com.tw" in host:
         return RutenParser(config)
     return GenericParser(config)
 

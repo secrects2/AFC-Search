@@ -1,6 +1,7 @@
 """Report service — generate Excel reports from database."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ DAILY_COLUMNS = [
     ("賣家", "seller"),
     ("商品網址", "url"),
     ("抓到價格", "price"),
+    ("價格來源", "price_source"),
     ("價差", "price_diff"),
     ("是否疑似破價", "is_violation"),
     ("狀態", "candidate_status"),
@@ -104,10 +106,20 @@ class ReportService:
         # Write data rows
         violation_fill = PatternFill("solid", fgColor="FFF2CC")
         for row_idx, snap in enumerate(snapshots, start=2):
+            # Parse raw_data once per row
+            try:
+                raw_data_dict = json.loads(snap.raw_data) if snap.raw_data else {}
+            except Exception:
+                raw_data_dict = {}
+                
             for col_idx, (_, attr) in enumerate(DAILY_COLUMNS, start=1):
-                value = getattr(snap, attr, "")
-                if attr == "is_violation":
+                if attr == "price_source":
+                    value = raw_data_dict.get("price_source", "dom")
+                elif attr == "is_violation":
                     value = "是" if snap.is_violation else ""
+                else:
+                    value = getattr(snap, attr, "")
+                    
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 cell.border = thin_border
                 if snap.is_violation:
@@ -130,10 +142,18 @@ class ReportService:
             writer = csv.writer(f)
             writer.writerow([label for label, _ in DAILY_COLUMNS])
             for snap in snapshots:
+                try:
+                    raw_data_dict = json.loads(snap.raw_data) if snap.raw_data else {}
+                except Exception:
+                    raw_data_dict = {}
+                    
                 row = []
                 for _, attr in DAILY_COLUMNS:
-                    value = getattr(snap, attr, "")
-                    if attr == "is_violation":
+                    if attr == "price_source":
+                        value = raw_data_dict.get("price_source", "dom")
+                    elif attr == "is_violation":
                         value = "是" if snap.is_violation else ""
+                    else:
+                        value = getattr(snap, attr, "")
                     row.append(value)
                 writer.writerow(row)

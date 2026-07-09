@@ -76,15 +76,6 @@ class DiscoverySearchService:
 
         results = provider.search(temp_product, int(self.config.max_results_per_product))
 
-        # Augment with FindPrice search
-        try:
-            from src.search.findprice_api import FindPriceProvider
-            fp_provider = FindPriceProvider()
-            fp_results = fp_provider.search(temp_product, int(self.config.max_results_per_product))
-            results.extend(fp_results)
-        except Exception as e:
-            LOGGER.warning("FindPrice search augmentation failed: %s", e)
-
         # Log API usage
         self.db.log_api_usage(
             provider=provider.last_provider,
@@ -97,6 +88,7 @@ class DiscoverySearchService:
         # Get existing URLs for this product
         existing_candidates = self.db.list_candidates(product_id=product_id)
         existing_urls = {c.url for c in existing_candidates}
+        global_exclusions = self.db.get_all_exclusion_keywords()
 
         from src.matcher import match_score
 
@@ -138,13 +130,24 @@ class DiscoverySearchService:
                 skipped_count += 1
                 continue
 
-            platform = detect_platform(sr.url)
+            # --- Global Exclusions ---
+            is_excluded = any(ex.lower() in result_title_lower for ex in global_exclusions)
+            status = "excluded" if is_excluded else "active"
+            if is_excluded:
+                LOGGER.info(
+                    "全域挑除關鍵字過濾: [%s] → %s",
+                    sr.product_name[:40], sr.url[:60],
+                )
+
+            detected_platform = detect_platform(sr.url)
+            platform = sr.platform if sr.platform not in {"", "manual", "other"} else detected_platform
             self.db.upsert_candidate(
                 product_id=product_id,
                 url=sr.url,
                 platform=platform,
                 title=sr.product_name,
                 source_found_by=sr.source or "serpapi",
+                status=status,
             )
             new_count += 1
             if score < 70:

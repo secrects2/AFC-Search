@@ -22,9 +22,18 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 playwright install chromium
+playwright install chromium
 ```
 
-OCR 為 fallback 能力；本機未安裝 OCR 引擎時，系統仍可執行，並在報表標記 `ocr_status = disabled`。
+### OCR 支援 (選擇性)
+
+本系統提供 `VisualPriceExtractor` 作為價格抓取的最後備援（當 DOM 解析失敗時）。此功能依賴 `pytesseract`，若未安裝 OCR 引擎，系統仍可正常執行並在報表標記 `ocr_status = disabled`。
+
+**Windows 用戶安裝 Tesseract OCR：**
+1. 前往 [Tesseract at UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki) 下載 Windows 安裝檔。
+2. 執行安裝程式（建議安裝在預設路徑 `C:\Program Files\Tesseract-OCR`）。
+3. 確保將安裝路徑加入系統環境變數 `Path` 中。
+4. 安裝時請確保勾選「繁體中文 (Traditional Chinese)」語言包。
 
 ## 商品主檔
 
@@ -273,6 +282,81 @@ Excel 報表包含：
 - 商品名稱相似度 `>= match_threshold`
 - 成功取得價格
 - 擷取價格 `< suggested_price - price_tolerance`
+
+## Shopee 商品價格取得
+
+### 為什麼不建議直接抓 Shopee？
+
+Shopee 是 SPA（Single Page Application），商品價格是 JavaScript 動態載入的：
+
+1. **`requests.get()`**：拿到的 HTML 只有空殼 `<div id="app"></div>`，沒有價格
+2. **Playwright headless**：Shopee 會偵測自動化瀏覽器，導向「選擇語言」頁面或顯示「頁面無法顯示」
+3. **Shopee API**：`/api/v4/item/get` 等端點已封鎖未授權請求（HTTP 403）
+
+因此 Shopee 採用 **Provider 架構**，優先使用第三方 API 取得價格。
+
+### Provider 架構
+
+系統會依序嘗試以下 provider：
+
+| 順序 | Provider | 說明 |
+|------|----------|------|
+| 1 | `ThirdPartyShopeeProvider` | 呼叫第三方 API（Apify / Scrapeless / Bright Data 等） |
+| 2 | `ShopeeHtmlFallbackProvider` | 解析 HTML 中的結構化資料（JSON-LD、meta） |
+| 3 | `ShopeePlaywrightFallbackProvider` | 最後備援，用 Playwright 渲染頁面 |
+
+### 設定第三方 Shopee Provider
+
+在 `.env` 中設定：
+
+```env
+SHOPEE_PROVIDER=third_party
+SHOPEE_THIRD_PARTY_API_URL=https://your-api-endpoint.com/shopee/product
+SHOPEE_THIRD_PARTY_API_KEY=your_api_key_here
+SHOPEE_TIMEOUT_SECONDS=60
+SHOPEE_MAX_RETRIES=1
+```
+
+`SHOPEE_PROVIDER` 可選值：
+
+- `third_party`：僅使用第三方 API
+- `html`：僅使用 HTML 解析
+- `playwright`：僅使用 Playwright
+- `chain`（預設）：依序嘗試全部
+
+第三方 API 請求格式為 POST JSON：
+
+```json
+{
+  "url": "https://shopee.tw/...",
+  "shop_id": "27439060",
+  "item_id": "24592685218"
+}
+```
+
+### 測試單一 Shopee URL
+
+```powershell
+.venv\Scripts\python.exe -c "
+from src.config import load_config
+from src.parsers.shopee import ShopeeParser
+from pathlib import Path
+
+config = load_config(Path('config.yaml'))
+parser = ShopeeParser(config)
+result = parser.parse('https://shopee.tw/product-i.27439060.24592685218', Path('output'))
+print(f'Price: {result.price}, Status: {result.parse_status}')
+"
+```
+
+### 報表中的 Shopee 狀態
+
+| 狀態 | 說明 |
+|------|------|
+| `ok` | 成功取得價格 |
+| `price_not_found` | HTML / DOM 中找不到價格（對應 `price_unknown`） |
+| `page_blocked` | Shopee 阻擋（403 / captcha / 語言頁）（對應 `blocked`） |
+| `search_failed` | provider 錯誤（timeout / 網路問題） |
 
 ## 合規注意事項
 

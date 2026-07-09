@@ -8,9 +8,10 @@ from typing import Any
 from urllib.parse import urljoin
 
 from src.loader import parse_price_value
-from src.ocr import OCREngine, capture_screenshot
+from src.ocr import capture_screenshot
 from src.parsers.base import BaseParser, ParserOutput
 from src.utils import sanitize_filename
+from src.visual_price import VisualPriceExtractor
 
 
 PRICE_PATTERNS = (
@@ -50,6 +51,7 @@ class GenericParser(BaseParser):
             evidence_text=evidence,
             image_urls=image_urls,
         )
+        output.raw_data["price_source"] = evidence if price is not None else "unknown"
 
         if price is None and (self.config.enable_screenshot or self.config.enable_ocr):
             screenshot_dir = output_dir / "screenshots"
@@ -59,16 +61,31 @@ class GenericParser(BaseParser):
             )
             output.screenshot_path = screenshot
             if screenshot_status == "ok" and self.config.enable_ocr:
-                ocr_text, ocr_status = OCREngine(self.config.enable_ocr).read_text(screenshot_path)
-                output.ocr_text = ocr_text
-                output.ocr_status = ocr_status
-                ocr_price, ocr_evidence = self.extract_price("", ocr_text)
-                if ocr_price is not None:
-                    output.price = ocr_price
-                    output.evidence_text = ocr_evidence
+                extractor = VisualPriceExtractor()
+                visual_result = extractor.extract_from_screenshot(str(screenshot_path), platform=self.platform)
+                
+                output.ocr_status = "ok" if visual_result.method != "error" else "ocr_failed"
+                output.ocr_text = visual_result.raw_text
+                
+                output.raw_data["visual_price_used"] = True
+                output.raw_data["visual_price_method"] = visual_result.method
+                output.raw_data["visual_price_raw_text"] = visual_result.raw_text
+                output.raw_data["visual_price_confidence"] = visual_result.confidence
+                
+                if visual_result.price is not None:
+                    output.price = visual_result.price
                     output.parse_status = "ok"
+                    output.raw_data["price_source"] = "visual_ocr"
+                    output.evidence_text = f"VisualOCR({visual_result.method}): {visual_result.price}"
+                else:
+                    output.raw_data["price_source"] = "unknown"
+                    if visual_result.error_message:
+                        output.evidence_text = f"VisualOCR Error: {visual_result.error_message}"
             else:
                 output.ocr_status = "disabled" if screenshot_status == "disabled" else screenshot_status
+
+        if output.price is not None and "price_source" not in output.raw_data:
+            output.raw_data["price_source"] = "dom"
 
         return output
 

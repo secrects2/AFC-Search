@@ -49,7 +49,8 @@ def capture_screenshot(url: str, screenshot_path: Path, headless: bool = True) -
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=headless)
             page = browser.new_page(viewport={"width": 1366, "height": 1800})
-            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.goto(url, wait_until="load", timeout=30000)
+            page.wait_for_timeout(2000) # Give it 2s for JS to settle
             page.screenshot(path=str(screenshot_path), full_page=True)
             browser.close()
         return str(screenshot_path), "ok"

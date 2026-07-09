@@ -3,7 +3,7 @@
 <section class="stats">
   <div class="stat">
     <span>最近監測</span>
-    <strong>{{ summary.last_check_time or "尚無資料" }}</strong>
+    <strong>{{ summary.last_check_time|format_tz if summary.last_check_time else "尚無資料" }}</strong>
   </div>
   <div class="stat">
     <span>監控商品數</span>
@@ -52,7 +52,7 @@
       <a href="/monitor/violations">查看全部</a>
     </div>
     <table class="compact">
-      <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>價差</th></tr></thead>
+      <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>價差</th><th>來源</th></tr></thead>
       <tbody>
       {% for s in violations %}
         <tr>
@@ -60,9 +60,20 @@
           <td>{{ s.platform }}</td>
           <td>{{ s.price }}</td>
           <td class="danger">{{ s.price_diff }}</td>
+          <td>
+            {% set raw = s.raw_data|fromjson if s.raw_data else {} %}
+            {% set p_src = raw.get('price_source', 'dom') %}
+            {% if p_src == 'visual_ocr' %}
+              <span class="badge" style="background:#e8f0fe;color:#1a73e8;border:1px solid #1a73e8;">👁️ 視覺辨識</span>
+            {% elif p_src == 'html_text' %}
+              <span class="badge" style="background:#fce8e6;color:#d93025;border:1px solid #d93025;">📝 文字解析</span>
+            {% else %}
+              <span style="color:#666;">{{ p_src }}</span>
+            {% endif %}
+          </td>
         </tr>
       {% else %}
-        <tr><td colspan="4">暫無疑似破價</td></tr>
+        <tr><td colspan="5">暫無疑似破價</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -80,7 +91,7 @@
           <td>{{ s.product_name[:20] }}</td>
           <td>{{ s.platform }}</td>
           <td>{{ s.price if s.price is not none else '-' }}</td>
-          <td>{{ s.candidate_status }}</td>
+          <td>{{ s.candidate_status|status_label }}</td>
         </tr>
       {% else %}
         <tr><td colspan="4">尚無監測結果，請先執行每日監測</td></tr>

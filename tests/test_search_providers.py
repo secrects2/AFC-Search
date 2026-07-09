@@ -170,7 +170,7 @@ def test_cache_persists_to_disk(tmp_path: Path) -> None:
 
 # --- Chain provider ---
 
-def test_chain_uses_first_successful_provider(tmp_path: Path) -> None:
+def test_chain_merges_successful_providers(tmp_path: Path) -> None:
     product = _make_product()
 
     class FakeProvider(SerpAPIProvider):
@@ -186,16 +186,63 @@ def test_chain_uses_first_successful_provider(tmp_path: Path) -> None:
         name = "fake_brave"
         enabled = True
         def search(self, product, max_results):
-            return []
+            return [SearchResult(
+                product_name="GENKI momo", url="https://momo.com.tw/1",
+                platform="momo", source="fake_brave",
+            )]
 
     chain = ChainSearchProvider(
         providers=[FakeProvider("k", []), FailProvider("k", [])],
         cache=SearchCache(tmp_path / "c.json"),
     )
     results = chain.search(product, 5)
-    assert len(results) == 1
+    assert len(results) == 2
     assert results[0].source == "fake_serpapi"
-    assert chain.last_provider == "fake_serpapi"
+    assert results[1].source == "fake_brave"
+    assert chain.last_provider == "fake_serpapi+fake_brave"
+
+
+def test_chain_does_not_stop_when_first_provider_hits_limit(tmp_path: Path) -> None:
+    product = _make_product()
+
+    class FullProvider(SerpAPIProvider):
+        name = "full_serpapi"
+        enabled = True
+
+        def search(self, product, max_results):
+            return [
+                SearchResult(
+                    product_name=f"GENKI {index}",
+                    url=f"https://momo.com.tw/{index}",
+                    platform="momo",
+                    source="full_serpapi",
+                )
+                for index in range(max_results)
+            ]
+
+    class ShopeeProvider(BraveSearchProvider):
+        name = "findprice"
+        enabled = True
+
+        def search(self, product, max_results):
+            return [
+                SearchResult(
+                    product_name="GENKI Shopee",
+                    url="https://www.findprice.com.tw/go/shopee",
+                    platform="shopee",
+                    source="findprice",
+                )
+            ]
+
+    chain = ChainSearchProvider(
+        providers=[FullProvider("k", []), ShopeeProvider("k", [])],
+        cache=SearchCache(tmp_path / "c.json"),
+    )
+    results = chain.search(product, 2)
+
+    assert len(results) == 3
+    assert any(result.platform == "shopee" for result in results)
+    assert chain.last_provider == "full_serpapi+findprice"
 
 
 def test_chain_falls_back_on_failure(tmp_path: Path) -> None:
@@ -241,4 +288,4 @@ def test_chain_returns_cached_results(tmp_path: Path) -> None:
 
 def test_build_chain_provider_no_keys(tmp_path: Path) -> None:
     chain = build_chain_provider("", "", ["shopee"], tmp_path / "c.json")
-    assert not chain.enabled
+    assert chain.enabled

@@ -48,12 +48,15 @@ class ProductPageExtractor:
         try:
             parser = get_parser(plat, url, self.config)
             output = parser.parse(url, output_dir)
+            merged_raw_data = {"evidence_text": output.evidence_text, "ocr_status": output.ocr_status}
+            merged_raw_data.update(output.raw_data)
+            
             return ExtractionResult(
                 title=output.title,
                 price=output.price,
                 seller=output.seller,
                 screenshot_path=output.screenshot_path,
-                raw_data={"evidence_text": output.evidence_text, "ocr_status": output.ocr_status},
+                raw_data=merged_raw_data,
                 error_message="" if output.parse_status == "ok" else output.evidence_text,
                 platform=output.platform or plat,
                 image_urls=output.image_urls or [],

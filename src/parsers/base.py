@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -30,6 +31,7 @@ class ParserOutput:
     image_urls: list[str] | None = None
     image_match_status: str = ""
     image_match_score: int = 0
+    raw_data: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseParser:

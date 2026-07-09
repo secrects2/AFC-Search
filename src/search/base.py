@@ -16,6 +16,8 @@ class SearchResult:
     rank: int = 0
     cached: bool = False
     searched_at: str = ""
+    found_price: float | None = None
+    seller: str = ""
 
 
 class BaseSearchProvider:

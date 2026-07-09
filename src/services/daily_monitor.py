@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from src.config import AppConfig, load_config
 from src.database import Database, CandidateRow
@@ -46,18 +47,41 @@ class DailyMonitorService:
         self.project_root = project_root
         self.extractor = ProductPageExtractor(config)
 
-    def run(self, product_id: int | None = None) -> DailyMonitorResult:
-        """Run daily monitor for all (or one) product's candidates."""
+    def run(
+        self,
+        product_id: int | None = None,
+        progress_callback: Any | None = None,
+    ) -> DailyMonitorResult:
+        """Run daily monitor for all (or one) product's candidates.
+
+        Args:
+            product_id: If set, only monitor this product's candidates.
+            progress_callback: Optional callable(current, total, message) for
+                progress reporting. Called after each candidate is checked.
+        """
         run_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
         screenshot_dir = self.project_root / "output" / "screenshots"
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         candidates = self.db.get_active_candidates(product_id)
-        LOGGER.info("每日監測開始：%d 個候選連結", len(candidates))
+        total = len(candidates)
+        LOGGER.info("每日監測開始：%d 個候選連結", total)
 
         result = DailyMonitorResult(run_time=run_time)
 
-        for candidate in candidates:
+        if progress_callback:
+            progress_callback(0, total, f"正在準備監測 {total} 個連結...")
+
+        for idx, candidate in enumerate(candidates, 1):
+            product_name = candidate.product_name or ""
+            platform = candidate.platform or ""
+
+            if progress_callback:
+                progress_callback(
+                    idx, total,
+                    f"({idx}/{total}) [{platform}] {product_name[:20]}...",
+                )
+
             try:
                 self._check_candidate(candidate, screenshot_dir, result)
             except Exception as exc:
@@ -76,7 +100,7 @@ class DailyMonitorService:
             if float(self.config.request_delay_seconds) > 0:
                 time.sleep(float(self.config.request_delay_seconds))
 
-        result.total_checked = len(candidates)
+        result.total_checked = total
         LOGGER.info(
             "每日監測完成：total=%d violations=%d unknown=%d normal=%d errors=%d",
             result.total_checked, result.violations,
@@ -115,11 +139,34 @@ class DailyMonitorService:
             candidate.url[:80],
         )
 
+        exclusion_keyword = self.db.find_matching_global_exclusion(candidate)
+        if exclusion_keyword:
+            return self._mark_candidate_excluded(candidate, result, exclusion_keyword)
+
         extraction = self.extractor.extract(
             url=candidate.url,
             platform=candidate.platform,
             screenshot_dir=screenshot_dir,
         )
+        extraction = self._apply_shopee_findprice_fallback(candidate, extraction)
+
+        exclusion_keyword = self.db.find_matching_global_exclusion(
+            candidate,
+            extra_values=(
+                extraction.title,
+                extraction.seller,
+                extraction.error_message,
+                extraction.raw_data,
+                extraction.raw_data.get("evidence_text", ""),
+            ),
+        )
+        if exclusion_keyword:
+            return self._mark_candidate_excluded(
+                candidate,
+                result,
+                exclusion_keyword,
+                extraction,
+            )
 
         # --- Name cross-validation ---
         # If we got a title from the page, verify it matches the expected product
@@ -228,6 +275,107 @@ class DailyMonitorService:
             },
         )
 
+        return extraction
+
+    def _mark_candidate_excluded(
+        self,
+        candidate: CandidateRow,
+        result: DailyMonitorResult,
+        keyword: str,
+        extraction: ExtractionResult | None = None,
+    ) -> ExtractionResult:
+        """Mark a candidate as excluded when it matches the global exclusion list."""
+        extraction = extraction or ExtractionResult(
+            title=candidate.title,
+            seller=candidate.seller,
+            platform=candidate.platform,
+            parse_status="excluded",
+            error_message=f"排除清單命中：{keyword}",
+            raw_data={},
+        )
+        extraction.parse_status = "excluded"
+        extraction.error_message = extraction.error_message or f"排除清單命中：{keyword}"
+
+        LOGGER.info(
+            "排除清單命中：candidate=%s keyword=%s title=%s",
+            candidate.id,
+            keyword,
+            (extraction.title or candidate.title)[:60],
+        )
+        self.db.update_candidate_status(
+            candidate_id=candidate.id,
+            status="excluded",
+            last_price=extraction.price if extraction.price is not None else candidate.last_price,
+        )
+        self.db.insert_snapshot(
+            candidate_id=candidate.id,
+            product_id=candidate.product_id,
+            price=extraction.price,
+            suggested_price=candidate.suggested_price,
+            is_violation=False,
+            screenshot_path=extraction.screenshot_path,
+            error_message=f"排除清單命中：{keyword}",
+            raw_data={
+                "exclusion_keyword": keyword,
+                "page_title": extraction.title,
+                "evidence_text": extraction.raw_data.get("evidence_text", ""),
+            },
+        )
+        return extraction
+
+    def _apply_shopee_findprice_fallback(
+        self,
+        candidate: CandidateRow,
+        extraction: ExtractionResult,
+    ) -> ExtractionResult:
+        """Use FindPrice's public comparison page when Shopee blocks product pages."""
+        if (candidate.platform or "").lower() != "shopee":
+            return extraction
+        if extraction.price is not None and extraction.parse_status == "ok":
+            return extraction
+        if extraction.parse_status not in {"page_blocked", "price_not_found", "error", "timeout"}:
+            return extraction
+
+        from src.search.findprice_api import find_best_findprice_listing
+
+        keyword = candidate.product_name or candidate.title
+        keyword_lower = keyword.lower()
+        if "afc" not in keyword_lower and "genki" not in keyword_lower:
+            keyword = f"AFC {keyword}"
+
+        listing = find_best_findprice_listing(
+            keyword=keyword,
+            expected_title=candidate.title or candidate.product_name,
+            preferred_platform="shopee",
+            timeout=int(self.config.request_timeout_seconds),
+        )
+        if not listing or listing.price is None:
+            return extraction
+
+        LOGGER.info(
+            "Shopee blocked; using FindPrice fallback: candidate=%s price=%s title=%s",
+            candidate.id,
+            listing.price,
+            listing.title[:60],
+        )
+        extraction.title = listing.title
+        extraction.price = listing.price
+        extraction.seller = listing.seller
+        extraction.platform = "shopee"
+        extraction.parse_status = "ok"
+        extraction.error_message = ""
+        extraction.raw_data.update(
+            {
+                "evidence_text": (
+                    "provider=findprice_shopee | "
+                    f"price={listing.price} | seller={listing.seller}"
+                ),
+                "price_source": "findprice_shopee",
+                "findprice_url": listing.url,
+                "findprice_price_text": listing.price_text,
+                "findprice_seller": listing.seller,
+            }
+        )
         return extraction
 
 

@@ -45,9 +45,9 @@
         <td>{{ c.platform }}</td>
         <td><a href="{{ c.url }}" target="_blank" title="{{ c.url }}">{{ (c.title or c.url)[:30] }}</a></td>
         <td>{{ c.last_price if c.last_price is not none else '-' }}</td>
-        <td>{{ c.status }}</td>
+        <td>{{ c.status|status_label }}</td>
         <td>{{ c.source_found_by }}</td>
-        <td>{{ c.last_checked_at[:16] if c.last_checked_at else '-' }}</td>
+        <td>{{ c.last_checked_at|format_tz if c.last_checked_at else '-' }}</td>
         <td style="white-space:nowrap">
           <form method="post" action="/candidates/{{ c.id }}/recheck" style="display:inline">
             <button type="submit" class="small">重查</button>

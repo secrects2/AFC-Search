@@ -17,6 +17,9 @@ class RunState:
     message: str = "尚未由網站手動執行"
     command: str = ""
     warning: str = ""
+    progress: int = 0
+    total: int = 0
+    percent: int = 0
 
 
 class MonitorRunner:
@@ -47,6 +50,9 @@ class MonitorRunner:
                 message="監控執行中",
                 command=" ".join(command),
                 warning=warning,
+                progress=0,
+                total=0,
+                percent=0,
             )
             thread = threading.Thread(target=self._run_command, args=(command,), daemon=True)
             thread.start()
@@ -80,4 +86,6 @@ class MonitorRunner:
             self._state.finished_at = datetime.now().isoformat(timespec="seconds")
             self._state.exit_code = completed.returncode
             self._state.message = "監控完成" if completed.returncode == 0 else "監控失敗，請查看 log"
-
+            self._state.progress = 1
+            self._state.total = 1
+            self._state.percent = 100

@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS product_candidates (
                          'price_unknown','excluded','error','inactive','blocked')),
     source_found_by TEXT DEFAULT 'manual'
         CHECK(source_found_by IN ('manual','serper','serpapi','brave',
-                                   'crawler','mcp')),
+                                   'crawler','mcp','findprice','shopee',
+                                   'findprice_shopee')),
     raw_data TEXT DEFAULT '{}'
 );
 
@@ -82,11 +83,25 @@ CREATE INDEX IF NOT EXISTS idx_candidates_status ON product_candidates(status);
 CREATE INDEX IF NOT EXISTS idx_snapshots_candidate ON price_snapshots(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_checked ON price_snapshots(checked_at);
 CREATE INDEX IF NOT EXISTS idx_api_usage_date ON api_usage_logs(used_at);
+
+CREATE TABLE IF NOT EXISTS global_exclusions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _matches_keyword(keyword: str, values: Iterable[Any]) -> bool:
+    needle = keyword.strip().lower()
+    if not needle:
+        return False
+    haystack = "\n".join(str(value or "") for value in values).lower()
+    return needle in haystack
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +223,72 @@ class Database:
             for col in ('official_image_url', 'official_image_path', 'official_image_hash'):
                 if col not in existing:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT DEFAULT ''")
+            self._migrate_candidate_source_constraint(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _migrate_candidate_source_constraint(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='product_candidates'"
+        ).fetchone()
+        if not row or "findprice" in (row["sql"] or ""):
+            return
+
+        LOGGER.info("Migrating product_candidates source_found_by constraint")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("CREATE TEMP TABLE product_candidates_backup AS SELECT * FROM product_candidates")
+        conn.execute("DROP TABLE product_candidates")
+        conn.execute(
+            """
+            CREATE TABLE product_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                platform TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                url TEXT NOT NULL UNIQUE,
+                seller TEXT DEFAULT '',
+                first_seen_at TEXT DEFAULT (datetime('now')),
+                last_checked_at TEXT,
+                last_price REAL,
+                status TEXT DEFAULT 'active'
+                    CHECK(status IN ('active','normal','suspected_violation',
+                                     'price_unknown','excluded','error','inactive','blocked')),
+                source_found_by TEXT DEFAULT 'manual'
+                    CHECK(source_found_by IN ('manual','serper','serpapi','brave',
+                                               'crawler','mcp','findprice','shopee',
+                                               'findprice_shopee')),
+                raw_data TEXT DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO product_candidates
+                (id, product_id, platform, title, url, seller, first_seen_at,
+                 last_checked_at, last_price, status, source_found_by, raw_data)
+            SELECT id, product_id, platform, title, url, seller, first_seen_at,
+                   last_checked_at, last_price, status,
+                   CASE
+                       WHEN source_found_by IN (
+                           'manual','serper','serpapi','brave','crawler','mcp',
+                           'findprice','shopee','findprice_shopee'
+                       )
+                       THEN source_found_by
+                       ELSE 'crawler'
+                   END,
+                   raw_data
+            FROM product_candidates_backup
+            """
+        )
+        conn.execute("DROP TABLE product_candidates_backup")
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_candidates_product ON product_candidates(product_id);
+            CREATE INDEX IF NOT EXISTS idx_candidates_status ON product_candidates(status);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
 
     # -- Products -----------------------------------------------------------
 
@@ -367,7 +445,10 @@ class Database:
             return [self._to_candidate(r) for r in cur.fetchall()]
 
     def list_candidates(
-        self, product_id: int | None = None, status: str | None = None
+        self,
+        product_id: int | None = None,
+        status: str | None = None,
+        include_excluded: bool = True,
     ) -> list[CandidateRow]:
         with self._cursor() as (conn, cur):
             sql = """
@@ -382,6 +463,8 @@ class Database:
             if status:
                 sql += " AND c.status = ?"
                 params.append(status)
+            elif not include_excluded:
+                sql += " AND c.status != 'excluded'"
             sql += " ORDER BY p.product_name, c.platform"
             cur.execute(sql, params)
             return [self._to_candidate(r) for r in cur.fetchall()]
@@ -468,7 +551,7 @@ class Database:
                 FROM price_snapshots s
                 JOIN product_candidates c ON s.candidate_id = c.id
                 JOIN products p ON s.product_id = p.id
-                WHERE 1=1
+                WHERE c.status != 'excluded'
             """
             params: list[Any] = []
             if date:
@@ -538,6 +621,121 @@ class Database:
                 params.append(since)
             cur.execute(sql, params)
             return cur.fetchone()["cnt"]
+
+    def get_api_usage_stats(self) -> dict[str, dict[str, int]]:
+        """Return usage stats grouped by provider and date."""
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """
+                SELECT provider, date(used_at) as dt, COUNT(*) as cost
+                FROM api_usage_logs
+                GROUP BY provider, dt
+                ORDER BY dt DESC, provider
+                """
+            )
+            rows = cur.fetchall()
+            
+        stats: dict[str, dict[str, int]] = {}
+        for row in rows:
+            provider = row["provider"]
+            dt = row["dt"]
+            cost = row["cost"]
+            if provider not in stats:
+                stats[provider] = {}
+            stats[provider][dt] = cost
+        return stats
+
+    # -- Global Exclusions ----------------------------------------------------
+
+    def add_global_exclusion(self, keyword: str) -> None:
+        """Add a keyword to the global exclusion list."""
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                "INSERT OR IGNORE INTO global_exclusions (keyword) VALUES (?)",
+                (keyword.strip(),)
+            )
+            
+    def remove_global_exclusion(self, exclusion_id: int) -> None:
+        """Remove a keyword from the global exclusion list."""
+        with self._cursor() as (conn, cur):
+            cur.execute("DELETE FROM global_exclusions WHERE id = ?", (exclusion_id,))
+            
+    def list_global_exclusions(self) -> list[dict[str, Any]]:
+        """List all global exclusions."""
+        with self._cursor() as (conn, cur):
+            cur.execute("SELECT id, keyword, created_at FROM global_exclusions ORDER BY created_at DESC")
+            return [dict(row) for row in cur.fetchall()]
+            
+    def get_all_exclusion_keywords(self) -> list[str]:
+        """Get just a list of all exclusion keywords for fast checking."""
+        with self._cursor() as (conn, cur):
+            cur.execute("SELECT keyword FROM global_exclusions")
+            return [row["keyword"] for row in cur.fetchall() if (row["keyword"] or "").strip()]
+
+    def find_matching_global_exclusion(
+        self,
+        candidate: CandidateRow,
+        extra_values: Iterable[Any] = (),
+    ) -> str:
+        """Return the first exclusion keyword matching a candidate or extra evidence."""
+        values = (
+            candidate.title,
+            candidate.product_name,
+            candidate.seller,
+            candidate.url,
+            candidate.brand,
+            candidate.raw_data,
+            *tuple(extra_values),
+        )
+        for keyword in self.get_all_exclusion_keywords():
+            if _matches_keyword(keyword, values):
+                return keyword
+        return ""
+            
+    def retroactively_exclude_candidates(self, keyword: str) -> int:
+        """Set status to 'excluded' for candidates matching the keyword."""
+        keyword = keyword.strip()
+        if not keyword:
+            return 0
+
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """
+                SELECT c.*, p.product_name, p.suggested_price, p.brand
+                FROM product_candidates c
+                JOIN products p ON c.product_id = p.id
+                WHERE c.status != 'excluded'
+                """
+            )
+            candidates = [self._to_candidate(row) for row in cur.fetchall()]
+            matched_ids = [
+                candidate.id
+                for candidate in candidates
+                if _matches_keyword(
+                    keyword,
+                    (
+                        candidate.title,
+                        candidate.product_name,
+                        candidate.seller,
+                        candidate.url,
+                        candidate.brand,
+                        candidate.raw_data,
+                    ),
+                )
+            ]
+            if not matched_ids:
+                return 0
+
+            placeholders = ",".join("?" for _ in matched_ids)
+            cur.execute(
+                f"""
+                UPDATE product_candidates
+                SET status = 'excluded', last_checked_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (_now_iso(), *matched_ids),
+            )
+            return cur.rowcount
 
     def get_api_usage_logs(self, limit: int = 100) -> list[ApiUsageRow]:
         with self._cursor() as (conn, cur):

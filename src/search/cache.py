@@ -17,9 +17,12 @@ from src.search.base import SearchResult
 LOGGER = logging.getLogger(__name__)
 
 
+CACHE_VERSION = "v2"
+
+
 def _cache_key(product_name: str) -> str:
     """Generate a stable cache key from product name."""
-    return hashlib.sha256(product_name.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(f"{CACHE_VERSION}:{product_name}".encode("utf-8")).hexdigest()[:16]
 
 
 def _result_to_dict(r: SearchResult) -> dict[str, Any]:
@@ -31,6 +34,8 @@ def _result_to_dict(r: SearchResult) -> dict[str, Any]:
         "source": r.source,
         "rank": r.rank,
         "searched_at": r.searched_at,
+        "found_price": r.found_price,
+        "seller": r.seller,
     }
 
 
@@ -44,6 +49,8 @@ def _dict_to_result(d: dict[str, Any], cached: bool = True) -> SearchResult:
         rank=d.get("rank", 0),
         cached=cached,
         searched_at=d.get("searched_at", ""),
+        found_price=d.get("found_price"),
+        seller=d.get("seller", ""),
     )
 
 

@@ -4,8 +4,10 @@ Replaces the Flask-based dashboard with FastAPI + Jinja2.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,31 @@ from src.services.budget_tracker import BudgetTracker
 LOGGER = logging.getLogger(__name__)
 
 
+def format_tz(iso_str: str) -> str:
+    """Convert ISO UTC string to Asia/Taipei (+8) and format."""
+    if not iso_str or iso_str == "-":
+        return "-"
+    try:
+        if iso_str.endswith("Z"):
+            iso_str = iso_str[:-1] + "+00:00"
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_tw = dt.astimezone(timezone(timedelta(hours=8)))
+        return dt_tw.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return iso_str[:16]
+
+def status_label(status: str) -> str:
+    mapping = {
+        "normal": "正常",
+        "suspected_violation": "疑似破價",
+        "price_unknown": "未抓到價格",
+        "error": "錯誤",
+        "blocked": "遭到阻擋",
+    }
+    return mapping.get(status, status) if status else ""
+
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = project_root or Path(__file__).resolve().parents[2]
     config = load_config(root / "config.yaml")
@@ -36,6 +63,9 @@ def create_app(project_root: Path | None = None) -> FastAPI:
 
     templates_dir = Path(__file__).parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
+    templates.env.filters["fromjson"] = json.loads
+    templates.env.filters["format_tz"] = format_tz
+    templates.env.filters["status_label"] = status_label
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -51,6 +81,9 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         "running": False,
         "message": "尚未執行",
         "warning": "",
+        "progress": 0,
+        "total": 0,
+        "percent": 0,
     }
     runner_lock = threading.Lock()
 
@@ -81,9 +114,12 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     # -- Products -----------------------------------------------------------
 
     @app.get("/products", response_class=HTMLResponse)
-    async def products_page(request: Request):
-        products = db.list_products(active_only=False)
-        return _render(request, "products.html", active="products", products=products)
+    async def products_page(request: Request, show_all: int = 0):
+        products = db.list_products(active_only=not bool(show_all))
+        return _render(
+            request, "products.html", active="products",
+            products=products, show_all=bool(show_all),
+        )
 
     @app.post("/products/import")
     async def import_products(request: Request, file: UploadFile = File(...)):
@@ -194,7 +230,11 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         product_id: int | None = None,
         status: str | None = None,
     ):
-        candidates = db.list_candidates(product_id=product_id, status=status)
+        candidates = db.list_candidates(
+            product_id=product_id,
+            status=status,
+            include_excluded=bool(status),
+        )
         products = db.list_products(active_only=False)
         return _render(
             request, "candidates.html", active="candidates",
@@ -239,7 +279,31 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             service.check_single_candidate(candidate_id)
         except Exception as exc:
             LOGGER.warning("Recheck failed: %s", exc)
+            
         return RedirectResponse(url="/candidates", status_code=303)
+
+    # -- Global Exclusions --------------------------------------------------
+    @app.get("/exclusions", response_class=HTMLResponse)
+    async def exclusions_page(request: Request):
+        exclusions = db.list_global_exclusions()
+        return _render(
+            request, "exclusions.html", active="exclusions",
+            exclusions=exclusions
+        )
+        
+    @app.post("/exclusions")
+    async def add_exclusion(keyword: str = Form(...)):
+        if keyword and keyword.strip():
+            db.add_global_exclusion(keyword.strip())
+            # Retroactively exclude existing candidates
+            count = db.retroactively_exclude_candidates(keyword.strip())
+            LOGGER.info("Added global exclusion '%s', retro-excluded %d candidates", keyword.strip(), count)
+        return RedirectResponse(url="/exclusions", status_code=303)
+        
+    @app.post("/exclusions/{exclusion_id}/delete")
+    async def delete_exclusion(exclusion_id: int):
+        db.remove_global_exclusion(exclusion_id)
+        return RedirectResponse(url="/exclusions", status_code=303)
 
     # -- Monitor Results ----------------------------------------------------
 
@@ -278,23 +342,37 @@ def create_app(project_root: Path | None = None) -> FastAPI:
                 return RedirectResponse(url="/", status_code=303)
             runner_state["running"] = True
             runner_state["message"] = "監測執行中..."
+            runner_state["progress"] = 0
+            runner_state["total"] = 0
+            runner_state["percent"] = 0
+
+        def _progress(current: int, total: int, message: str):
+            with runner_lock:
+                runner_state["progress"] = current
+                runner_state["total"] = total
+                runner_state["percent"] = int(current / total * 100) if total > 0 else 0
+                runner_state["message"] = message
 
         def _run():
             try:
                 from src.services.daily_monitor import DailyMonitorService
                 from src.services.report_service import ReportService
                 service = DailyMonitorService(db, config, root)
-                result = service.run()
+                result = service.run(progress_callback=_progress)
                 ReportService(db, root).export_daily_report()
                 ReportService(db, root).export_violations_report()
                 with runner_lock:
                     runner_state["message"] = (
-                        f"監測完成：{result.total_checked} 筆, "
-                        f"{result.violations} 疑似破價"
+                        f"✅ 監測完成：{result.total_checked} 筆, "
+                        f"{result.violations} 疑似破價, "
+                        f"{result.price_unknown} 未知價格"
                     )
+                    runner_state["progress"] = result.total_checked
+                    runner_state["total"] = result.total_checked
+                    runner_state["percent"] = 100
             except Exception as exc:
                 with runner_lock:
-                    runner_state["message"] = f"監測失敗：{exc}"
+                    runner_state["message"] = f"❌ 監測失敗：{exc}"
             finally:
                 with runner_lock:
                     runner_state["running"] = False

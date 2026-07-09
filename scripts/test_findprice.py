@@ -2,7 +2,9 @@ import urllib.request
 import urllib.parse
 from bs4 import BeautifulSoup
 
-def test_findprice(keyword):
+__test__ = False
+
+def run_findprice(keyword):
     # FindPrice URL format: https://www.findprice.com.tw/g/AFC+DHA
     url = f"https://www.findprice.com.tw/g/{urllib.parse.quote(keyword)}"
     req = urllib.request.Request(url, headers={
@@ -36,4 +38,4 @@ def test_findprice(keyword):
         print(f"Error fetching FindPrice for '{keyword}': {e}")
 
 if __name__ == "__main__":
-    test_findprice("AFC DHA")
+    run_findprice("AFC DHA")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
@@ -20,11 +22,48 @@ from src.web.data_store import (
 from src.web.runner import MonitorRunner
 
 
+def _fromjson(value: str) -> object:
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+def _format_tz(iso_str: str) -> str:
+    if not iso_str or iso_str == "-":
+        return "-"
+    try:
+        if iso_str.endswith("Z"):
+            iso_str = iso_str[:-1] + "+00:00"
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return iso_str[:16]
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "normal": "正常",
+        "suspected_violation": "疑似破價",
+        "price_unknown": "未抓到價格",
+        "error": "錯誤",
+        "blocked": "遭到阻擋",
+        "active": "待監測",
+        "excluded": "已排除",
+    }
+    return labels.get(status, status) if status else ""
+
+
 def create_app(project_root: Path | None = None) -> Flask:
     root = project_root or Path(__file__).resolve().parents[2]
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["PROJECT_ROOT"] = root
     app.config["RUNNER"] = MonitorRunner(root)
+    app.jinja_env.filters["fromjson"] = _fromjson
+    app.jinja_env.filters["format_tz"] = _format_tz
+    app.jinja_env.filters["status_label"] = _status_label
 
     @app.context_processor
     def inject_globals() -> dict[str, object]:
@@ -42,7 +81,14 @@ def create_app(project_root: Path | None = None) -> Flask:
             "dashboard.html",
             active="dashboard",
             summary=build_summary(root),
+            budget={
+                "daily_used": 0,
+                "daily_budget": 0,
+                "monthly_used": 0,
+                "monthly_budget": 0,
+            },
             violations=violations[:8],
+            recent=recent_rows,
             recent_rows=recent_rows,
             logs=read_log_tail(root, "scheduler.log", 12),
         )

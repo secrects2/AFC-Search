@@ -27,26 +27,64 @@
   </header>
   <nav class="nav">
     <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/">儀表板</a>
-    <a class="{{ 'active' if active == 'products' else '' }}" href="/products">商品清單</a>
-    <a class="{{ 'active' if active == 'candidates' else '' }}" href="/candidates">候選連結</a>
-    <a class="{{ 'active' if active == 'results' else '' }}" href="/monitor/results">監測結果</a>
-    <a class="{{ 'active' if active == 'violations' else '' }}" href="/monitor/violations">疑似破價</a>
-    <a class="{{ 'active' if active == 'api-usage' else '' }}" href="/api-usage">API 用量</a>
+    <a class="{{ 'active' if active == 'products' else '' }}" href="/products">商品<span class="desktop-only">清單</span></a>
+    <a class="{{ 'active' if active == 'candidates' else '' }}" href="/candidates">待審<span class="desktop-only">商品</span></a>
+    <a class="{{ 'active' if active == 'exclusions' else '' }}" href="/exclusions">挑除<span class="desktop-only">清單</span></a>
+    <a class="{{ 'active' if active == 'results' else '' }}" href="/monitor/results">監測<span class="desktop-only">結果</span></a>
+    <a class="{{ 'active' if active == 'violations' else '' }}" href="/monitor/violations">疑似<span class="desktop-only">破價</span></a>
+    <a class="{{ 'active' if active == 'api-usage' else '' }}" href="/api-usage">API<span class="desktop-only"> 用量</span></a>
   </nav>
   <main>
     {% if run_status.warning %}
       <div class="notice">{{ run_status.warning }}</div>
     {% endif %}
+    <div id="progress-container" style="display:{% if run_status.running %}block{% else %}none{% endif %};margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
+        <span class="status-line" style="font-weight:600;color:#1a73e8;">
+          {{ run_status.message }}
+        </span>
+        <span id="progress-pct" style="font-size:14px;color:#666;">
+          {% if run_status.total > 0 %}{{ run_status.percent }}%{% endif %}
+        </span>
+      </div>
+      <div style="background:#e0e0e0;border-radius:8px;height:10px;overflow:hidden;">
+        <div id="progress-bar" style="
+          background:linear-gradient(90deg,#1a73e8,#4fc3f7);
+          height:100%;
+          border-radius:8px;
+          width:{{ run_status.percent }}%;
+          transition:width 0.5s ease;
+        "></div>
+      </div>
+    </div>
     {% block content %}{% endblock %}
   </main>
 <script>
 (function() {
   const statusLine = document.querySelector('.status-line');
+  const progressBar = document.getElementById('progress-bar');
+  const progressPct = document.getElementById('progress-pct');
+  const progressContainer = document.getElementById('progress-container');
   const buttons = document.querySelectorAll('form[action*="/run"], form[action*="/discovery"] button');
   let wasRunning = {% if run_status.running %}true{% else %}false{% endif %};
   let pollTimer = null;
 
   function updateUI(data) {
+    // Update progress bar
+    if (data.running && progressContainer) {
+      progressContainer.style.display = 'block';
+      if (progressBar) {
+        progressBar.style.width = (data.percent || 0) + '%';
+      }
+      if (progressPct && data.total > 0) {
+        progressPct.textContent = data.percent + '% (' + data.progress + '/' + data.total + ')';
+      }
+    } else if (!data.running && progressContainer) {
+      // Keep visible briefly after completion to show final message
+      if (progressBar) progressBar.style.width = '100%';
+      if (progressPct) progressPct.textContent = '';
+    }
+
     // Update status text
     if (statusLine) {
       let msg = data.message || '';
@@ -72,7 +110,7 @@
     if (wasRunning && !data.running) {
       wasRunning = false;
       clearInterval(pollTimer);
-      window.location.reload();
+      setTimeout(() => window.location.reload(), 1500);
       return;
     }
     wasRunning = data.running;

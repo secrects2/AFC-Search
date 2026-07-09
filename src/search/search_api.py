@@ -1,7 +1,4 @@
-"""Chain search provider with automatic fallback and caching.
-
-Tries search providers in order (SerpAPI → Brave) and caches results.
-"""
+"""Chain search provider with automatic fallback, aggregation, and caching."""
 from __future__ import annotations
 
 import logging
@@ -11,7 +8,9 @@ from src.loader import Product
 from src.search.base import BaseSearchProvider, SearchResult
 from src.search.brave_search import BraveSearchProvider
 from src.search.cache import SearchCache
+from src.search.findprice_api import FindPriceProvider
 from src.search.serp_api import SerpAPIProvider
+from src.search.shopee_search import ShopeeSearchProvider
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,22 +50,31 @@ class ChainSearchProvider(BaseSearchProvider):
                 )
                 return cached
 
-        # Try each provider in order
+        combined: list[SearchResult] = []
+        seen_urls: set[str] = set()
+        used_providers: list[str] = []
+
+        # Try each provider in order and merge results. This keeps Shopee and
+        # FindPrice candidates from being skipped when SerpAPI returns only
+        # non-Shopee results first.
         for provider in self.providers:
             try:
                 results = provider.search(product, max_results)
                 if results:
-                    self._last_provider = provider.name
+                    used_providers.append(provider.name)
                     LOGGER.info(
                         "%s 搜尋成功：%s (%d 筆)",
                         provider.name,
                         product.product_name,
                         len(results),
                     )
-                    # Cache the results
-                    if self.cache:
-                        self.cache.put(product.product_name, results)
-                    return results
+                    for result in results:
+                        normalized_url = result.url.strip().lower()
+                        if not normalized_url or normalized_url in seen_urls:
+                            continue
+                        seen_urls.add(normalized_url)
+                        combined.append(result)
+                    continue
                 LOGGER.info(
                     "%s 無結果，嘗試下一個：%s",
                     provider.name,
@@ -81,6 +89,12 @@ class ChainSearchProvider(BaseSearchProvider):
                 )
                 continue
 
+        if combined:
+            self._last_provider = "+".join(used_providers)
+            if self.cache:
+                self.cache.put(product.product_name, combined)
+            return combined
+
         self._last_provider = "none"
         return []
 
@@ -93,7 +107,7 @@ def build_chain_provider(
     cache_hours: int = 24,
     timeout: float = 15,
 ) -> ChainSearchProvider:
-    """Build a ChainSearchProvider with SerpAPI → Brave fallback."""
+    """Build a ChainSearchProvider with API search plus free fallbacks."""
     providers: list[BaseSearchProvider] = []
 
     if serpapi_key:
@@ -109,6 +123,13 @@ def build_chain_provider(
             platforms=platforms,
             timeout=timeout,
         ))
+
+    # Always append FindPrice as a free fallback.
+    providers.append(FindPriceProvider())
+
+    # Append Shopee direct search (using Playwright) as the last resort.
+    if not platforms or "shopee" in {platform.lower() for platform in platforms}:
+        providers.append(ShopeeSearchProvider(timeout=int(timeout)))
 
     cache = SearchCache(cache_path, ttl_hours=cache_hours) if cache_path else None
 
