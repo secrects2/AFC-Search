@@ -57,11 +57,19 @@ class DiscoverySearchService:
             LOGGER.warning("搜尋供應商未設定（SERPAPI_API_KEY / BRAVE_SEARCH_API_KEY）")
             return {"found": 0, "new": 0, "existing": 0}
 
-        # Build a temporary Product object for the search provider
+        # Build a temporary Product object for the search provider.
+        # Always include "AFC" in the search query so we get brand-specific
+        # results instead of generic category matches (e.g. "葉酸錠" -> all
+        # brands instead of just AFC).
         from src.loader import Product
+        search_name = product.product_name
+        name_lower = search_name.lower()
+        if "afc" not in name_lower and "genki" not in name_lower:
+            search_name = f"AFC {search_name}"
+
         temp_product = Product(
             suggested_price=product.suggested_price or 0,
-            product_name=product.product_name,
+            product_name=search_name,
             row_index=product.id,
             raw_suggested_price=str(product.suggested_price or ""),
         )
@@ -92,13 +100,35 @@ class DiscoverySearchService:
 
         from src.matcher import match_score
 
+        # Determine brand identifiers to check in result titles.
+        # All our products belong to AFC or its sub-brands.
+        brand_identifiers = ["afc", "宇勝"]
+        if product.brand:
+            brand_identifiers.append(product.brand.lower())
+        # Sub-brands
+        prod_lower = product.product_name.lower()
+        for sub in ("genki", "frura", "華舞", "爽快柑", "髮優", "究極", "菁鑽", "子供"):
+            if sub in prod_lower:
+                brand_identifiers.append(sub)
+
         new_count = 0
         skipped_count = 0
         for sr in results:
             if sr.url in existing_urls:
                 continue
 
-            # Name matching: compare search result title vs product name
+            # --- Brand filtering: reject results that don't mention AFC ---
+            result_title_lower = (sr.product_name or "").lower()
+            has_brand = any(b in result_title_lower for b in brand_identifiers)
+            if not has_brand:
+                LOGGER.info(
+                    "品牌過濾(非AFC): [%s] → %s",
+                    sr.product_name[:40], sr.url[:60],
+                )
+                skipped_count += 1
+                continue
+
+            # --- Name matching: compare search result title vs product name ---
             score = match_score(product.product_name, sr.product_name)
             if score < 50:
                 LOGGER.info(
