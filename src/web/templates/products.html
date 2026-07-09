@@ -60,6 +60,7 @@
       <thead>
         <tr>
           <th>ID</th>
+          <th>官網圖片</th>
           <th>商品名稱</th>
           <th>建議售價</th>
           <th>品牌</th>
@@ -75,6 +76,20 @@
         <!-- Display row -->
         <tr id="row-{{ p.id }}">
           <td>{{ p.id }}</td>
+          <td class="thumb-cell">
+            {% if p.official_image_path %}
+              {% set img_filename = p.official_image_path.split('\\')[-1].split('/')[-1] %}
+              <a href="/product-images/{{ img_filename }}" target="_blank" title="點擊查看原圖">
+                <img src="/product-images/{{ img_filename }}" alt="{{ p.product_name }}" class="product-thumb" loading="lazy">
+              </a>
+            {% elif p.official_image_url %}
+              <a href="{{ p.official_image_url }}" target="_blank" title="點擊查看原圖">
+                <img src="{{ p.official_image_url }}" alt="{{ p.product_name }}" class="product-thumb" loading="lazy">
+              </a>
+            {% else %}
+              <span class="no-image" title="尚無圖片">🖼️</span>
+            {% endif %}
+          </td>
           <td class="product"><a href="/candidates?product_id={{ p.id }}">{{ p.product_name }}</a></td>
           <td>{{ p.suggested_price if p.suggested_price is not none else '-' }}</td>
           <td>{{ p.brand or '-' }}</td>
@@ -100,6 +115,14 @@
         <tr id="edit-{{ p.id }}" style="display:none;background:#f8fafb">
           <form method="post" action="/products/{{ p.id }}/update">
             <td>{{ p.id }}</td>
+            <td class="thumb-cell">
+              {% if p.official_image_path %}
+                {% set img_filename = p.official_image_path.split('\\')[-1].split('/')[-1] %}
+                <img src="/product-images/{{ img_filename }}" alt="{{ p.product_name }}" class="product-thumb" loading="lazy">
+              {% else %}
+                <span class="no-image">🖼️</span>
+              {% endif %}
+            </td>
             <td><input type="text" name="product_name" value="{{ p.product_name }}" required style="width:100%;min-width:180px"></td>
             <td><input type="number" name="suggested_price" value="{{ p.suggested_price or '' }}" step="0.01" style="width:90px"></td>
             <td><input type="text" name="brand" value="{{ p.brand }}" style="width:80px"></td>
@@ -147,6 +170,42 @@
     min-height: 32px;
     padding: 4px 6px;
     font-size: 13px;
+  }
+
+  /* Product thumbnail styles */
+  .thumb-cell {
+    width: 56px;
+    text-align: center;
+    padding: 4px !important;
+  }
+  .product-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border, #dde1e6);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+    background: #f4f5f7;
+  }
+  .product-thumb:hover {
+    transform: scale(2.5);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    z-index: 100;
+    position: relative;
+    border-color: var(--accent, #2196f3);
+  }
+  .no-image {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    font-size: 20px;
+    color: var(--muted, #999);
+    background: #f4f5f7;
+    border-radius: 6px;
+    border: 1px dashed var(--border, #dde1e6);
   }
 </style>
 

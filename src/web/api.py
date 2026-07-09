@@ -41,6 +41,11 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    # Serve official product images as static files
+    images_dir = root / "data" / "official_images"
+    if images_dir.exists():
+        app.mount("/product-images", StaticFiles(directory=str(images_dir)), name="product-images")
+
     # Shared state for background runner
     runner_state: dict[str, Any] = {
         "running": False,
