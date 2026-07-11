@@ -76,6 +76,7 @@ class ShopeeParser(BaseParser):
             "ok": "ok",
             "price_unknown": "price_not_found",
             "blocked": "page_blocked",
+            "language_required": "language_required",
             "error": "search_failed",
         }
         parse_status = status_map.get(result.status, "search_failed")

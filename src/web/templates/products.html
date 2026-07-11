@@ -29,7 +29,7 @@
         </label>
         <label>
           <span>建議售價</span>
-          <input type="number" name="suggested_price" step="0.01" placeholder="1380">
+          <input type="number" name="suggested_price" step="1" placeholder="1380">
         </label>
         <label>
           <span>品牌</span>
@@ -91,7 +91,7 @@
             {% endif %}
           </td>
           <td class="product"><a href="/candidates?product_id={{ p.id }}">{{ p.product_name }}</a></td>
-          <td>{{ p.suggested_price if p.suggested_price is not none else '-' }}</td>
+          <td>{{ p.suggested_price|int if p.suggested_price is not none else '-' }}</td>
           <td>{{ p.brand or '-' }}</td>
           <td class="truncate" style="max-width:140px">{{ p.keywords or '-' }}</td>
           <td class="truncate" style="max-width:140px">{{ p.exclude_keywords or '-' }}</td>
@@ -124,7 +124,7 @@
               {% endif %}
             </td>
             <td><input type="text" name="product_name" value="{{ p.product_name }}" required style="width:100%;min-width:180px"></td>
-            <td><input type="number" name="suggested_price" value="{{ p.suggested_price or '' }}" step="0.01" style="width:90px"></td>
+            <td><input type="number" name="suggested_price" value="{{ p.suggested_price|int if p.suggested_price is not none else '' }}" step="1" style="width:90px"></td>
             <td><input type="text" name="brand" value="{{ p.brand }}" style="width:80px"></td>
             <td><input type="text" name="keywords" value="{{ p.keywords }}" style="width:120px"></td>
             <td><input type="text" name="exclude_keywords" value="{{ p.exclude_keywords }}" style="width:120px"></td>

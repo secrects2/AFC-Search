@@ -59,10 +59,10 @@ Register-ScheduledTask `
     -Trigger $dashTrigger `
     -Settings $dashSettings `
     -Principal $UserPrincipal `
-    -Description "AFC Dashboard (http://127.0.0.1:8001)" `
+    -Description "AFC Dashboard (http://127.0.0.1:8002)" `
     -Force | Out-Null
 
-Write-Host "  OK - Dashboard will start on logon (port 8001)" -ForegroundColor Green
+Write-Host "  OK - Dashboard will start on logon (port 8002)" -ForegroundColor Green
 
 # ---------------------------------------------------------------
 # 2. Daily Monitor - every day at 08:00

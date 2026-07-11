@@ -8,7 +8,9 @@ from src.loader import Product
 from src.search.base import BaseSearchProvider, SearchResult
 from src.search.brave_search import BraveSearchProvider
 from src.search.cache import SearchCache
-from src.search.findprice_api import FindPriceProvider
+from src.search.lbj_api import LbjSearchProvider
+from src.search.biggo_api import BigGoSearchProvider
+from src.search.feebee_search import FeebeeSearchProvider
 from src.search.serp_api import SerpAPIProvider
 from src.search.shopee_search import ShopeeSearchProvider
 
@@ -100,36 +102,28 @@ class ChainSearchProvider(BaseSearchProvider):
 
 
 def build_chain_provider(
-    serpapi_key: str,
-    brave_key: str,
-    platforms: list[str],
-    cache_path: Path,
+    serpapi_key: str = "",
+    brave_key: str = "",
+    platforms: list[str] | None = None,
+    cache_path: Path | None = None,
     cache_hours: int = 24,
-    timeout: float = 15,
+    timeout: float = 15.0,
 ) -> ChainSearchProvider:
-    """Build a ChainSearchProvider with API search plus free fallbacks."""
+    """Helper to build the default search chain."""
     providers: list[BaseSearchProvider] = []
 
+    # 1. Specialized providers (most likely to have accurate, e-commerce specific results)
+    providers.append(ShopeeSearchProvider())
+    providers.append(FeebeeSearchProvider(platforms=platforms))
+    providers.append(BigGoSearchProvider(platforms=platforms))
+    providers.append(LbjSearchProvider(platforms=platforms))
+
+    # 2. Paid / High-quality generic search engines
     if serpapi_key:
-        providers.append(SerpAPIProvider(
-            api_key=serpapi_key,
-            platforms=platforms,
-            timeout=timeout,
-        ))
+        providers.append(SerpAPIProvider(api_key=serpapi_key, platforms=platforms, timeout=timeout))
 
     if brave_key:
-        providers.append(BraveSearchProvider(
-            api_key=brave_key,
-            platforms=platforms,
-            timeout=timeout,
-        ))
-
-    # Always append FindPrice as a free fallback.
-    providers.append(FindPriceProvider())
-
-    # Append Shopee direct search (using Playwright) as the last resort.
-    if not platforms or "shopee" in {platform.lower() for platform in platforms}:
-        providers.append(ShopeeSearchProvider(timeout=int(timeout)))
+        providers.append(BraveSearchProvider(api_key=brave_key, platforms=platforms, timeout=timeout))
 
     cache = SearchCache(cache_path, ttl_hours=cache_hours) if cache_path else None
 

@@ -19,6 +19,10 @@ from typing import Any
 from src.config import AppConfig, load_config
 from src.database import Database, CandidateRow
 from src.extractors import ProductPageExtractor, ExtractionResult
+from src.services.platform_rate_limiter import PlatformRateLimiter
+from src.services.source_health import SourceHealthTracker
+from src.services.fallback_price_provider import FallbackPriceProvider
+from src.services.final_price import select_final_price
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +50,11 @@ class DailyMonitorService:
         self.config = config
         self.project_root = project_root
         self.extractor = ProductPageExtractor(config)
+        self.rate_limiter = PlatformRateLimiter(config.platform_rate_limits, db)
+        self.health_tracker = SourceHealthTracker(db)
+        self.fallback_provider = FallbackPriceProvider(
+            {"request_timeout_seconds": config.request_timeout_seconds}, db
+        )
 
     def run(
         self,
@@ -96,9 +105,7 @@ class DailyMonitorService:
                 )
                 result.errors += 1
 
-            # Rate limiting
-            if float(self.config.request_delay_seconds) > 0:
-                time.sleep(float(self.config.request_delay_seconds))
+        self.health_tracker.auto_cooldown_rules()
 
         result.total_checked = total
         LOGGER.info(
@@ -122,14 +129,46 @@ class DailyMonitorService:
         screenshot_dir = self.project_root / "output" / "screenshots"
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         dummy_result = DailyMonitorResult()
-        extraction = self._check_candidate(target, screenshot_dir, dummy_result)
+        extraction = self._check_candidate(target, screenshot_dir, dummy_result, force_direct=True)
         return extraction
+
+    def _mark_candidate_excluded(
+        self, candidate: CandidateRow, result: DailyMonitorResult, keyword: str
+    ) -> ExtractionResult:
+        self.db.update_candidate_status(candidate.id, "excluded")
+        self.db.insert_snapshot(
+            candidate_id=candidate.id,
+            product_id=candidate.product_id,
+            price=None,
+            suggested_price=candidate.suggested_price,
+            error_message=f"Excluded by keyword: {keyword}",
+        )
+        # Excluded is often counted as "normal" so it doesn't alarm the user
+        result.normal += 1
+        
+        # We also need to insert an observation so it shows up in dashboard
+        self.db.insert_observation(
+            product_id=candidate.product_id,
+            candidate_id=candidate.id,
+            platform=candidate.platform or "",
+            source="direct_html",
+            url=candidate.url,
+            status="error",
+            error_message=f"Excluded by keyword: {keyword}",
+        )
+        
+        return ExtractionResult(
+            platform=candidate.platform or "",
+            parse_status="excluded",
+            error_message=f"Excluded by keyword: {keyword}",
+        )
 
     def _check_candidate(
         self,
         candidate: CandidateRow,
         screenshot_dir: Path,
         result: DailyMonitorResult,
+        force_direct: bool = False,
     ) -> ExtractionResult:
         """Check one candidate URL and update DB."""
         LOGGER.info(
@@ -143,267 +182,276 @@ class DailyMonitorService:
         if exclusion_keyword:
             return self._mark_candidate_excluded(candidate, result, exclusion_keyword)
 
-        extraction = self.extractor.extract(
-            url=candidate.url,
-            platform=candidate.platform,
-            screenshot_dir=screenshot_dir,
-        )
-        extraction = self._apply_shopee_findprice_fallback(candidate, extraction)
+        product = self.db.get_product(candidate.product_id)
 
-        exclusion_keyword = self.db.find_matching_global_exclusion(
-            candidate,
-            extra_values=(
-                extraction.title,
-                extraction.seller,
-                extraction.error_message,
-                extraction.raw_data,
-                extraction.raw_data.get("evidence_text", ""),
-            ),
-        )
-        if exclusion_keyword:
-            return self._mark_candidate_excluded(
-                candidate,
-                result,
-                exclusion_keyword,
-                extraction,
+        # -------------------------------------------------------------------
+        # Source 1: Direct Crawl
+        # -------------------------------------------------------------------
+        direct_extraction: ExtractionResult | None = None
+        platform_lower = (candidate.platform or "").lower()
+
+        # Check conditions for direct crawl
+        skip_direct = False
+        direct_status = ""
+        
+        if "findprice.com.tw/go/" in candidate.url:
+            skip_direct = True
+            direct_status = "source_dead"
+            LOGGER.info("FindPrice URL obsolete, skipping direct crawl: %s", candidate.url[:50])
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform="findprice",
+                source="direct_html",
+                url=candidate.url,
+                status="source_dead",
+                error_message="FindPrice go URL is permanently obsolete",
+            )
+        elif "findprice.com.tw/go/" in candidate.url.lower():
+            skip_direct = True
+            direct_status = "skipped"
+            LOGGER.info("Skipping direct crawl for FindPrice redirect URL: %s", candidate.url[:50])
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform="findprice",
+                source="direct_html",
+                url=candidate.url,
+                status="skipped",
+                error_message="FindPrice redirects are handled via Feebee fallback",
+            )
+        elif "biggo.com.tw" in candidate.url.lower():
+            skip_direct = True
+            direct_status = "skipped"
+            LOGGER.info("Skipping direct crawl for BigGo URL: %s", candidate.url[:50])
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform="biggo",
+                source="direct_html",
+                url=candidate.url,
+                status="skipped",
+                error_message="BigGo is handled via fallback",
+            )
+        elif "lbj.tw" in candidate.url.lower():
+            skip_direct = True
+            direct_status = "skipped"
+            LOGGER.info("Skipping direct crawl for LBJ URL: %s", candidate.url[:50])
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform="lbj",
+                source="direct_html",
+                url=candidate.url,
+                status="skipped",
+                error_message="LBJ is handled via fallback",
+            )
+        elif platform_lower == "shopee" and not self.config.shopee_direct_daily_crawl_enabled and not force_direct:
+            skip_direct = True
+            direct_status = "skipped_direct_crawl"
+            LOGGER.info("Shopee direct crawl disabled by config, skipping: %s", candidate.url[:50])
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform="shopee",
+                source="direct_html",
+                url=candidate.url,
+                status="skipped_direct_crawl",
+                error_message="shopee_direct_daily_crawl_enabled=False",
+            )
+        elif not force_direct and not self.rate_limiter.before_request(platform_lower):
+            skip_direct = True
+            direct_status = "rate_limited"
+            LOGGER.warning("Platform %s is in cooldown, skipping direct crawl.", platform_lower)
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform=platform_lower,
+                source="direct_html",
+                url=candidate.url,
+                status="rate_limited",
+                error_message="Platform cooldown due to previous HTTP 429",
             )
 
-        # --- Name cross-validation ---
-        # If we got a title from the page, verify it matches the expected product
-        from src.matcher import match_score
-        title_score = 0
-        if extraction.title and extraction.parse_status == "ok":
-            title_score = match_score(candidate.product_name, extraction.title)
-            if title_score < 40:
-                LOGGER.warning(
-                    "名稱不符 (score=%d)：預期 [%s] 但頁面標題為 [%s]，標記為 excluded",
-                    title_score, candidate.product_name, extraction.title[:50],
-                )
-                self.db.update_candidate_status(candidate.id, "excluded")
-                self.db.insert_snapshot(
-                    candidate_id=candidate.id,
-                    product_id=candidate.product_id,
-                    price=extraction.price,
-                    suggested_price=candidate.suggested_price,
-                    is_violation=False,
-                    screenshot_path=extraction.screenshot_path,
-                    error_message=f"名稱不符 (score={title_score}): {extraction.title[:80]}",
-                    raw_data={"title_match_score": title_score, "page_title": extraction.title},
-                )
-                result.errors += 1
-                return extraction
-
-        # --- Image cross-validation ---
-        image_score = 0
-        if (
-            self.config.enable_image_match
-            and extraction.screenshot_path
-            and extraction.parse_status == "ok"
-        ):
-            from src.image_matcher import average_hash_file, hamming_similarity
-            product = self.db.get_product(candidate.product_id)
-            if product and product.official_image_hash:
-                try:
-                    screen_hash = average_hash_file(Path(extraction.screenshot_path))
-                    image_score = hamming_similarity(product.official_image_hash, screen_hash)
-                    threshold = int(self.config.image_match_threshold or 80)
+        if not skip_direct:
+            # Extract
+            direct_extraction = self.extractor.extract(
+                url=candidate.url,
+                platform=platform_lower,
+                screenshot_dir=screenshot_dir,
+            )
+            
+            # Map parse_status to observation status
+            obs_status = "success"
+            score = 0
+            conf = 0.0
+            
+            if direct_extraction.parse_status == "ok":
+                # Check exclusion on the extracted title/seller!
+                from src.database import _matches_keyword
+                exclusion_keywords = self.db.get_all_exclusion_keywords()
+                matched_ex = None
+                for ex in exclusion_keywords:
+                    if _matches_keyword(ex, (direct_extraction.title, direct_extraction.seller)):
+                        matched_ex = ex
+                        break
+                if matched_ex:
+                    LOGGER.info("Candidate %s excluded by extracted content: %s", candidate.id, matched_ex)
+                    return self._mark_candidate_excluded(candidate, result, matched_ex)
                     
-                    if image_score < threshold:
-                        LOGGER.warning(
-                            "圖片不符 (score=%d < %d)：商品 [%s] 截圖比對失敗，標記為 excluded",
-                            image_score, threshold, candidate.product_name,
-                        )
-                        self.db.update_candidate_status(candidate.id, "excluded")
-                        self.db.insert_snapshot(
-                            candidate_id=candidate.id,
-                            product_id=candidate.product_id,
-                            price=extraction.price,
-                            suggested_price=candidate.suggested_price,
-                            is_violation=False,
-                            screenshot_path=extraction.screenshot_path,
-                            error_message=f"圖片不符 (score={image_score})",
-                            raw_data={
-                                "title_match_score": title_score,
-                                "image_match_score": image_score,
-                                "page_title": extraction.title
-                            },
-                        )
-                        result.errors += 1
-                        return extraction
-                except Exception as exc:
-                    LOGGER.warning("圖片比對失敗: %s", exc)
+                if direct_extraction.price is not None:
+                    from src.matcher import match_score
+                    score = match_score(candidate.product_name, direct_extraction.title or "")
+                    conf = 0.9 if score > 80 else 0.5
+                else:
+                    obs_status = "price_unknown"
+            elif direct_extraction.parse_status == "page_blocked":
+                obs_status = "blocked"
+            elif direct_extraction.parse_status == "captcha_required":
+                obs_status = "captcha_required"
+            elif direct_extraction.parse_status == "traffic_verify":
+                obs_status = "traffic_verify"
+            elif direct_extraction.parse_status == "timeout":
+                obs_status = "error"
+            elif "429" in str(direct_extraction.error_message or "") or direct_extraction.parse_status == "rate_limited":
+                obs_status = "rate_limited"
+                self.rate_limiter.on_429(platform_lower, "direct_html")
+            else:
+                obs_status = "error"
 
-        # Determine status
-        suggested = candidate.suggested_price
-        price = extraction.price
-        is_violation = False
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform=platform_lower,
+                source="direct_html",
+                url=candidate.url,
+                title=direct_extraction.title or "",
+                seller=direct_extraction.seller or "",
+                price=direct_extraction.price,
+                match_score=score,
+                confidence=conf,
+                status=obs_status,
+                error_message=direct_extraction.error_message,
+                raw_data=direct_extraction.raw_data,
+            )
+            self.health_tracker.record("direct_html", platform_lower, obs_status)
 
-        if extraction.parse_status in ("error", "page_blocked", "timeout", "language_required"):
-            status = "error"
-            result.errors += 1
-        elif price is None:
-            status = "price_unknown"
-            result.price_unknown += 1
-        elif suggested is not None and price < suggested - float(self.config.price_tolerance):
-            status = "suspected_violation"
-            is_violation = True
-            result.violations += 1
+        # -------------------------------------------------------------------
+        # Source 2: Fallback Providers (Feebee, BigGo, LBJ)
+        # -------------------------------------------------------------------
+        fallback_obs = self.fallback_provider.observe(product, candidate)
+        if fallback_obs:
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                **fallback_obs
+            )
+            self.health_tracker.record(fallback_obs["source"], fallback_obs["platform"], fallback_obs["status"])
         else:
-            status = "normal"
-            result.normal += 1
+            # Record failure
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform=platform_lower,
+                source="fallback",
+                url="",
+                status="price_unknown",
+                error_message="Fallback providers returned no results or excluded"
+            )
+            self.health_tracker.record("fallback", platform_lower, "price_unknown")
 
-        # Preserve takedown_notified: keep tracking but don't change the status
+        # -------------------------------------------------------------------
+        # Make Final Decision
+        # -------------------------------------------------------------------
+        recent_obs = self.db.get_observations_for_decision(candidate.product_id)
+        # Filter to only this candidate's obs + global product manual obs
+        candidate_obs = [o for o in recent_obs if o.candidate_id == candidate.id or o.source == "manual"]
+        
+        decision = select_final_price(
+            product_id=candidate.product_id,
+            observations=candidate_obs,
+            suggested_price=candidate.suggested_price,
+        )
+
+        LOGGER.info(
+            "決策結果：[%s] price=%s status=%s source=%s reason=%s",
+            candidate.product_name, decision.final_price, decision.final_status,
+            decision.final_price_source, decision.decision_reason
+        )
+
+        # Create a unified ExtractionResult for the caller/reports
+        final_extraction = direct_extraction or ExtractionResult(
+            platform=platform_lower,
+            parse_status="ok" if decision.final_price else "error",
+        )
+        # Assign url directly since ExtractionResult doesn't take it in its init (only title, price, etc.)
+        final_extraction.raw_data["url"] = candidate.url
+        
+        # Override with decision
+        final_extraction.price = decision.final_price
+        final_extraction.raw_data["price_source"] = decision.final_price_source
+        
+        # Update metrics
+        if decision.final_status in ("suspected_violation", "verified_violation"):
+            result.violations += 1
+            # Maintain backward compat with current 'suspected_violation'
+            decision.final_status = "suspected_violation" 
+            final_extraction.parse_status = "ok"
+        elif decision.final_status == "price_unknown":
+            result.price_unknown += 1
+            final_extraction.parse_status = "price_not_found"
+        elif decision.final_status == "needs_review":
+            result.normal += 1  # count as normal but needs review
+            final_extraction.parse_status = "ok"
+        elif decision.final_status in ("verified_price", "likely_price", "normal"):
+            decision.final_status = "normal"
+            result.normal += 1
+            final_extraction.parse_status = "ok"
+        else:
+            result.errors += 1
+            final_extraction.parse_status = "error"
+
+        # Update candidate
         current_status = candidate.status if hasattr(candidate, 'status') else ''
         if current_status == 'takedown_notified':
-            # Keep takedown_notified, but still record the snapshot and violation
-            self.db.update_candidate_status(
-                candidate_id=candidate.id,
-                status='takedown_notified',
-                last_price=price,
-            )
+            db_status = 'takedown_notified'
         else:
-            self.db.update_candidate_status(
-                candidate_id=candidate.id,
-                status=status,
-                last_price=price,
-            )
+            db_status = decision.final_status
+            if db_status == "price_unknown" and skip_direct and "FindPrice" in direct_status:
+                db_status = "source_dead"
 
-        # Insert snapshot
-        self.db.insert_snapshot(
-            candidate_id=candidate.id,
-            product_id=candidate.product_id,
-            price=price,
-            suggested_price=suggested,
-            is_violation=is_violation,
-            screenshot_path=extraction.screenshot_path,
-            error_message=extraction.error_message,
-            raw_data={
-                "evidence_text": extraction.raw_data.get("evidence_text", ""),
-                "title_match_score": title_score,
-                "page_title": extraction.title,
-            },
-        )
-
-        return extraction
-
-    def _mark_candidate_excluded(
-        self,
-        candidate: CandidateRow,
-        result: DailyMonitorResult,
-        keyword: str,
-        extraction: ExtractionResult | None = None,
-    ) -> ExtractionResult:
-        """Mark a candidate as excluded when it matches the global exclusion list."""
-        extraction = extraction or ExtractionResult(
-            title=candidate.title,
-            seller=candidate.seller,
-            platform=candidate.platform,
-            parse_status="excluded",
-            error_message=f"排除清單命中：{keyword}",
-            raw_data={},
-        )
-        extraction.parse_status = "excluded"
-        extraction.error_message = extraction.error_message or f"排除清單命中：{keyword}"
-
-        LOGGER.info(
-            "排除清單命中：candidate=%s keyword=%s title=%s",
-            candidate.id,
-            keyword,
-            (extraction.title or candidate.title)[:60],
-        )
         self.db.update_candidate_status(
             candidate_id=candidate.id,
-            status="excluded",
-            last_price=extraction.price if extraction.price is not None else candidate.last_price,
+            status=db_status,
+            last_price=decision.final_price,
         )
-        self.db.insert_snapshot(
+
+        # Update snapshot
+        snapshot_id = self.db.insert_snapshot(
             candidate_id=candidate.id,
             product_id=candidate.product_id,
-            price=extraction.price,
+            price=decision.final_price,
             suggested_price=candidate.suggested_price,
-            is_violation=False,
-            screenshot_path=extraction.screenshot_path,
-            error_message=f"排除清單命中：{keyword}",
+            is_violation=(db_status == "suspected_violation"),
+            screenshot_path=final_extraction.screenshot_path,
+            error_message="",
             raw_data={
-                "exclusion_keyword": keyword,
-                "page_title": extraction.title,
-                "evidence_text": extraction.raw_data.get("evidence_text", ""),
+                "decision_reason": decision.decision_reason,
+                "all_prices": decision.all_prices,
             },
         )
-        return extraction
-
-    def _apply_shopee_findprice_fallback(
-        self,
-        candidate: CandidateRow,
-        extraction: ExtractionResult,
-    ) -> ExtractionResult:
-        """Use FindPrice's public comparison page when Shopee blocks product pages."""
-        if (candidate.platform or "").lower() != "shopee":
-            return extraction
-        if extraction.price is not None and extraction.parse_status == "ok":
-            return extraction
-        if extraction.parse_status not in {
-            "page_blocked",
-            "price_not_found",
-            "price_unknown",
-            "search_failed",
-            "error",
-            "timeout",
-            "language_required",
-        }:
-            return extraction
-
-        from src.search.findprice_api import find_best_findprice_listing
-
-        # Use product keywords if available (from DB), otherwise fall back to name
-        product_row = self.db.get_product(candidate.product_id)
-        if product_row and product_row.keywords:
-            first_kw = product_row.keywords.split(",")[0].strip()
-            brand_prefix = product_row.brand or "AFC"
-            if brand_prefix.lower() in first_kw.lower():
-                keyword = first_kw
-            else:
-                keyword = f"{brand_prefix} {first_kw}"
-        else:
-            keyword = candidate.product_name or candidate.title
-            keyword_lower = keyword.lower()
-            if "afc" not in keyword_lower and "genki" not in keyword_lower:
-                keyword = f"AFC {keyword}"
-
-        listing = find_best_findprice_listing(
-            keyword=keyword,
-            expected_title=candidate.title or candidate.product_name,
-            preferred_platform="shopee",
-            timeout=int(self.config.request_timeout_seconds),
+        
+        # Update final_price columns
+        self.db.update_snapshot_final_price(
+            snapshot_id=snapshot_id,
+            final_price=decision.final_price,
+            final_price_source=decision.final_price_source,
+            final_confidence=decision.final_confidence,
+            final_status=decision.final_status,
+            decision_reason=decision.decision_reason,
         )
-        if not listing or listing.price is None:
-            return extraction
 
-        LOGGER.info(
-            "Shopee blocked; using FindPrice fallback: candidate=%s price=%s title=%s",
-            candidate.id,
-            listing.price,
-            listing.title[:60],
-        )
-        extraction.title = listing.title
-        extraction.price = listing.price
-        extraction.seller = listing.seller
-        extraction.platform = "shopee"
-        extraction.parse_status = "ok"
-        extraction.error_message = ""
-        extraction.raw_data.update(
-            {
-                "evidence_text": (
-                    "provider=findprice_shopee | "
-                    f"price={listing.price} | seller={listing.seller}"
-                ),
-                "price_source": "findprice_shopee",
-                "findprice_url": listing.url,
-                "findprice_price_text": listing.price_text,
-                "findprice_seller": listing.seller,
-            }
-        )
-        return extraction
+        return final_extraction
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +464,20 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--disable-dead-findprice", action="store_true",
+                        help="Mark all findprice.com.tw/go/ candidates as source_dead")
+    args = parser.parse_args()
+
     root = Path(__file__).resolve().parent.parent.parent
     config = load_config(root / "config.yaml")
     db = Database(root / "data" / "price_monitor.db")
+
+    if args.disable_dead_findprice:
+        db.disable_findprice_candidates()
+        LOGGER.info("FindPrice清理完畢。")
+        return 0
 
     # Auto-import products if DB is empty
     if not db.list_products():

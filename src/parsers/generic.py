@@ -29,7 +29,7 @@ class GenericParser(BaseParser):
 
     def parse(self, url: str, output_dir: Path) -> ParserOutput:
         try:
-            html_text = self.fetch_page(url)
+            html_text = self.fetch_page(url, platform=self.platform)
         except PermissionError as exc:
             return ParserOutput(self.platform, url, parse_status="page_blocked", evidence_text=str(exc))
         except requests_timeout_errors() as exc:
@@ -54,6 +54,11 @@ class GenericParser(BaseParser):
         output.raw_data["price_source"] = evidence if price is not None else "unknown"
 
         if price is None and (self.config.enable_screenshot or self.config.enable_ocr):
+            if "findprice.com.tw/go/" in url:
+                output.parse_status = "price_not_found"
+                output.evidence_text = "FindPrice redirect unresolved"
+                return output
+                
             screenshot_dir = output_dir / "screenshots"
             screenshot_path = screenshot_dir / f"{sanitize_filename(title or self.platform)}.png"
             screenshot, screenshot_status = capture_screenshot(

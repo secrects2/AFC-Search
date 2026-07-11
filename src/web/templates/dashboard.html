@@ -10,8 +10,12 @@
     <strong>{{ summary.total_products }}</strong>
   </div>
   <div class="stat danger">
-    <span>疑似破價</span>
+    <span>監控中</span>
     <strong>{{ summary.violations }}</strong>
+  </div>
+  <div class="stat warning">
+    <span>取消監控</span>
+    <strong>{{ summary.takedown_notified }}</strong>
   </div>
   <div class="stat warning">
     <span>未抓到價格</span>
@@ -29,7 +33,7 @@
     <div class="status-line">{{ run_status.message }}</div>
   </div>
   <div class="downloads">
-    <a class="button" href="/downloads/daily_report.xlsx">每日報表</a>
+    <a class="button" href="/downloads/daily_report.xlsx">每日掃描</a>
     <a class="button" href="/downloads/suspected_violations.xlsx">破價報表</a>
   </div>
 </section>
@@ -55,11 +59,11 @@
       <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>價差</th><th>來源</th></tr></thead>
       <tbody>
       {% for s in violations %}
-        <tr>
+        <tr class="danger-row">
           <td>{{ s.product_name[:20] }}</td>
           <td>{{ s.platform }}</td>
-          <td>{{ s.price }}</td>
-          <td class="danger">{{ s.price_diff }}</td>
+          <td>{{ s.price|int if s.price is not none else '-' }}</td>
+          <td class="danger">{{ s.price_diff|int if s.price_diff is not none else '-' }}</td>
           <td>
             {% set raw = s.raw_data|fromjson if s.raw_data else {} %}
             {% set p_src = raw.get('price_source', 'dom') %}
@@ -87,10 +91,10 @@
       <thead><tr><th>商品</th><th>平台</th><th>價格</th><th>狀態</th></tr></thead>
       <tbody>
       {% for s in recent %}
-        <tr>
+        <tr class="{{ 'danger-row' if s.is_violation else '' }}">
           <td>{{ s.product_name[:20] }}</td>
           <td>{{ s.platform }}</td>
-          <td>{{ s.price if s.price is not none else '-' }}</td>
+          <td>{{ s.price|int if s.price is not none else '-' }}</td>
           <td>{{ s.candidate_status|status_label }}</td>
         </tr>
       {% else %}

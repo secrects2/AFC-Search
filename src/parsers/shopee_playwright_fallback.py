@@ -1,12 +1,17 @@
 """ShopeePlaywrightFallbackProvider — last-resort Playwright-based extraction.
 
-Uses Playwright with normal browser settings (no stealth, no bypass).
-If Shopee blocks the request (language page, 403, captcha, "頁面無法顯示"),
-it marks the result as blocked and does NOT retry.
+Uses Playwright with a persistent browser profile so that language/region
+preferences are preserved across runs.  Users must run
+``tools/setup_shopee_profile.py`` once to initialise the profile.
+
+If Shopee blocks the request (403, captcha, login wall) the result is
+marked as blocked and is NOT retried.  This provider does NOT attempt to
+bypass any anti-bot measures.
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -22,25 +27,97 @@ from src.visual_price import VisualPriceExtractor
 
 LOGGER = logging.getLogger(__name__)
 
-# Patterns that indicate Shopee has blocked us
-BLOCKED_INDICATORS = [
+# ---------------------------------------------------------------------------
+# Language page detection
+# ---------------------------------------------------------------------------
+
+# Indicators that the page is a Shopee *language selection* page.
+# We treat this separately from generic blocking because the fix is simple:
+# run tools/setup_shopee_profile.py once to set the language preference.
+LANGUAGE_PAGE_INDICATORS = [
     "選擇語言",
+    "choose language",
+    "select language",
+    "ภาษาไทย",
+    "tiếng việt",
+]
+
+# If *multiple* of these tokens appear together on the same page it is very
+# likely a language picker page (e.g. the Shopee homepage language overlay
+# that lists "繁體中文 · English · Bahasa Indonesia · …").
+LANGUAGE_LIST_TOKENS = [
+    "繁體中文",
+    "english",
+    "bahasa",
+]
+
+# ---------------------------------------------------------------------------
+# Blocked page detection
+# ---------------------------------------------------------------------------
+
+BLOCKED_INDICATORS = [
     "頁面無法顯示",
     "發生錯誤",
     "請登入",
+    "access denied",
+    "403",
     "captcha",
     "verify",
     "robot",
+    "驗證",
 ]
 
 
+def is_shopee_language_page(page) -> bool:
+    """Return True if *page* is the Shopee language / region selection page.
+
+    This inspects the page title and visible body text.  The function is
+    intentionally conservative: it should NOT match normal product pages.
+    """
+    title = ""
+    body = ""
+    try:
+        title = (page.title() or "").lower()
+    except Exception:
+        pass
+    try:
+        body = (page.inner_text("body") or "")[:3000].lower()
+    except Exception:
+        pass
+
+    combined = title + " " + body
+
+    # Direct keyword match
+    if any(indicator in combined for indicator in LANGUAGE_PAGE_INDICATORS):
+        return True
+
+    # Heuristic: if at least 2 of the language-list tokens appear, the page
+    # is almost certainly the language picker overlay.
+    matches = sum(1 for token in LANGUAGE_LIST_TOKENS if token in combined)
+    if matches >= 2:
+        return True
+
+    return False
+
+
 class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
-    """Last-resort provider using Playwright — no stealth, no bypass."""
+    """Last-resort provider using Playwright with a persistent browser profile."""
 
     name = "playwright"
 
-    def __init__(self, timeout: int = 30) -> None:
+    def __init__(
+        self,
+        timeout: int = 30,
+        profile_dir: str = "",
+        headless: bool = False,
+    ) -> None:
         self.timeout = timeout
+        self.profile_dir = profile_dir or os.environ.get(
+            "SHOPEE_PROFILE_DIR", "data/browser_profiles/shopee"
+        )
+        self.headless = headless if profile_dir else (
+            os.environ.get("SHOPEE_HEADLESS", "false").lower() in ("true", "1", "yes")
+        )
         self._playwright_available: bool | None = None
 
     @property
@@ -84,34 +161,47 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
     def _fetch_with_playwright(
         self, url: str, result: ShopeePriceResult,
     ) -> ShopeePriceResult:
-        """Open URL in Playwright, extract price from rendered DOM."""
+        """Open URL in Playwright persistent context, extract price from DOM."""
         from playwright.sync_api import sync_playwright
 
+        # Resolve profile directory relative to project root
+        profile_path = Path(self.profile_dir)
+        if not profile_path.is_absolute():
+            profile_path = Path.cwd() / profile_path
+        profile_path.mkdir(parents=True, exist_ok=True)
+
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_path),
+                headless=self.headless,
                 viewport={"width": 1366, "height": 900},
                 locale="zh-TW",
                 timezone_id="Asia/Taipei",
+                args=["--lang=zh-TW"],
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/124.0.0.0 Safari/537.36"
                 ),
-                extra_http_headers={
-                    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
-                },
             )
 
-            page = context.new_page()
+            page = context.pages[0] if context.pages else context.new_page()
 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
             except Exception as exc:
-                browser.close()
+                context.close()
                 result.status = "error"
                 result.error_message = f"Navigation failed: {exc}"
                 return result
+
+            # After navigation, Shopee may have redirected and the original
+            # page reference may be stale.  Always use the latest active page.
+            try:
+                pages = context.pages
+                page = pages[-1] if pages else page
+            except Exception:
+                pass
 
             # Wait a moment for dynamic content
             try:
@@ -120,23 +210,49 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
                     timeout=10000,
                 )
             except Exception:
-                page.wait_for_timeout(3000)
+                try:
+                    page.wait_for_timeout(3000)
+                except Exception:
+                    pass
 
-            # Check if blocked
+            # --- Language page detection (separate from generic blocking) ---
+            if is_shopee_language_page(page):
+                title = ""
+                try:
+                    title = page.title() or ""
+                except Exception:
+                    pass
+                result.status = "language_required"
+                result.title = title
+                result.error_message = (
+                    "Shopee opened language selection page. "
+                    "Please run tools/setup_shopee_profile.py once."
+                )
+                LOGGER.warning(
+                    "Shopee language page detected. Run tools/setup_shopee_profile.py to fix."
+                )
+                context.close()
+                return result
+
+            # --- Generic blocked detection ---
             body_text = ""
             try:
                 body_text = (page.inner_text("body") or "")[:3000]
             except Exception:
                 pass
 
-            title = page.title() or ""
+            title = ""
+            try:
+                title = page.title() or ""
+            except Exception:
+                pass
 
             if self._is_blocked(title, body_text):
-                browser.close()
                 result.status = "blocked"
                 result.title = title
-                result.error_message = "Shopee blocked: language page / 403 / captcha"
+                result.error_message = "Shopee blocked: 403 / captcha / login wall"
                 LOGGER.info("Shopee Playwright blocked: %s", title[:60])
+                context.close()
                 return result
 
             # Extract title
@@ -172,7 +288,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
                 except Exception as e:
                     LOGGER.warning("Shopee Playwright OCR fallback failed: %s", e)
 
-            browser.close()
+            context.close()
 
             result.status = "ok" if result.price is not None else "price_unknown"
             if result.price is None:

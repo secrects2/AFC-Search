@@ -57,15 +57,26 @@ class DiscoverySearchService:
             LOGGER.warning("搜尋供應商未設定（SERPAPI_API_KEY / BRAVE_SEARCH_API_KEY）")
             return {"found": 0, "new": 0, "existing": 0}
 
-        # Build a temporary Product object for the search provider.
-        # Always include "AFC" in the search query so we get brand-specific
-        # results instead of generic category matches (e.g. "葉酸錠" -> all
-        # brands instead of just AFC).
         from src.loader import Product
+
+        # Build search query: prefer keywords if set, otherwise use product name.
+        # Keywords are curated and concise, giving better search results.
         search_name = product.product_name
-        name_lower = search_name.lower()
-        if "afc" not in name_lower and "genki" not in name_lower:
-            search_name = f"AFC {search_name}"
+        if product.keywords:
+            # Use brand + first keyword for a focused search
+            first_kw = product.keywords.split(",")[0].strip()
+            brand_prefix = product.brand or "AFC"
+            # Avoid duplicating brand if keyword already contains it
+            if brand_prefix.lower() in first_kw.lower():
+                search_name = first_kw
+            else:
+                search_name = f"{brand_prefix} {first_kw}"
+        else:
+            name_lower = search_name.lower()
+            if "afc" not in name_lower and "genki" not in name_lower:
+                search_name = f"AFC {search_name}"
+
+        LOGGER.info("搜尋關鍵字：%s (product=%s)", search_name, product.product_name)
 
         temp_product = Product(
             suggested_price=product.suggested_price or 0,

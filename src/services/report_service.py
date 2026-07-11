@@ -21,8 +21,15 @@ DAILY_COLUMNS = [
     ("賣場商品標題", "title"),
     ("賣家", "seller"),
     ("商品網址", "url"),
-    ("抓到價格", "price"),
-    ("價格來源", "price_source"),
+    ("最終價格", "final_price"),
+    ("最終來源", "final_price_source"),
+    ("最終信心度", "final_confidence"),
+    ("最終狀態", "final_status"),
+    ("直接抓價", "direct_price"),
+    ("飛比抓價", "feebee_price"),
+    ("人工價格", "manual_price"),
+    ("決策原因", "decision_reason"),
+    ("舊有抓價", "price"),
     ("價差", "price_diff"),
     ("是否疑似破價", "is_violation"),
     ("狀態", "candidate_status"),
@@ -115,14 +122,47 @@ class ReportService:
             for col_idx, (_, attr) in enumerate(DAILY_COLUMNS, start=1):
                 if attr == "price_source":
                     value = raw_data_dict.get("price_source", "dom")
+                elif attr == "direct_price":
+                    value = raw_data_dict.get("all_prices", {}).get("direct_html", "")
+                elif attr == "feebee_price":
+                    value = raw_data_dict.get("all_prices", {}).get("feebee", "")
+                elif attr == "manual_price":
+                    value = raw_data_dict.get("all_prices", {}).get("manual", "")
                 elif attr == "is_violation":
                     value = "是" if snap.is_violation else ""
+                elif attr == "candidate_status":
+                    status_map = {
+                        "normal": "正常",
+                        "suspected_violation": "監控中",
+                        "price_unknown": "未抓到價格",
+                        "error": "錯誤",
+                        "blocked": "遭到阻擋",
+                        "takedown_notified": "取消監控",
+                        "source_dead": "網址失效",
+                    }
+                    value = status_map.get(getattr(snap, attr, ""), getattr(snap, attr, ""))
+                elif attr == "final_status":
+                    final_status_map = {
+                        "verified_price": "高可信",
+                        "likely_price": "中可信",
+                        "needs_review": "需審核",
+                        "price_unknown": "未抓到價格",
+                        "suspected_violation": "疑似破價",
+                        "verified_violation": "確認破價",
+                    }
+                    val = getattr(snap, "final_status", "")
+                    value = final_status_map.get(val, val)
+                elif attr in ("price", "suggested_price", "price_diff", "final_price"):
+                    raw_val = getattr(snap, attr, None)
+                    if attr == "price_diff" and hasattr(snap, "final_price") and snap.final_price and snap.suggested_price:
+                         raw_val = snap.suggested_price - snap.final_price
+                    value = int(raw_val) if raw_val is not None else ""
                 else:
                     value = getattr(snap, attr, "")
                     
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 cell.border = thin_border
-                if snap.is_violation:
+                if snap.is_violation or getattr(snap, "final_status", "") in ("suspected_violation", "verified_violation"):
                     cell.fill = violation_fill
 
         # Auto-adjust column widths
@@ -151,8 +191,41 @@ class ReportService:
                 for _, attr in DAILY_COLUMNS:
                     if attr == "price_source":
                         value = raw_data_dict.get("price_source", "dom")
+                    elif attr == "direct_price":
+                        value = raw_data_dict.get("all_prices", {}).get("direct_html", "")
+                    elif attr == "feebee_price":
+                        value = raw_data_dict.get("all_prices", {}).get("feebee", "")
+                    elif attr == "manual_price":
+                        value = raw_data_dict.get("all_prices", {}).get("manual", "")
                     elif attr == "is_violation":
                         value = "是" if snap.is_violation else ""
+                    elif attr == "candidate_status":
+                        status_map = {
+                            "normal": "正常",
+                            "suspected_violation": "監控中",
+                            "price_unknown": "未抓到價格",
+                            "error": "錯誤",
+                            "blocked": "遭到阻擋",
+                            "takedown_notified": "取消監控",
+                            "source_dead": "網址失效",
+                        }
+                        value = status_map.get(getattr(snap, attr, ""), getattr(snap, attr, ""))
+                    elif attr == "final_status":
+                        final_status_map = {
+                            "verified_price": "高可信",
+                            "likely_price": "中可信",
+                            "needs_review": "需審核",
+                            "price_unknown": "未抓到價格",
+                            "suspected_violation": "疑似破價",
+                            "verified_violation": "確認破價",
+                        }
+                        val = getattr(snap, "final_status", "")
+                        value = final_status_map.get(val, val)
+                    elif attr in ("price", "suggested_price", "price_diff", "final_price"):
+                        raw_val = getattr(snap, attr, None)
+                        if attr == "price_diff" and hasattr(snap, "final_price") and snap.final_price and snap.suggested_price:
+                            raw_val = snap.suggested_price - snap.final_price
+                        value = int(raw_val) if raw_val is not None else ""
                     else:
                         value = getattr(snap, attr, "")
                     row.append(value)

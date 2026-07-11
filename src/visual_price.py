@@ -108,6 +108,9 @@ class VisualPriceExtractor:
         self.method = "pytesseract"
         try:
             import pytesseract
+            import os
+            if os.name == 'nt' and os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+                pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
             self.enabled = True
         except ImportError:
             self.enabled = False

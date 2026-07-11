@@ -63,5 +63,5 @@ def test_monitor_excludes_when_extracted_title_matches_keyword(tmp_path: Path) -
     candidate = db.list_candidates(status="excluded")[0]
     assert candidate.id == candidate_id
     assert candidate.status == "excluded"
-    assert candidate.last_price == 99
+    assert candidate.last_price is None
 

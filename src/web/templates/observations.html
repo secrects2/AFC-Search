@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-row">
+  <h2>多來源觀測紀錄</h2>
+  <div style="font-size: 14px; color: #666;">
+    顯示所有來源的價格觀測紀錄（包含直接抓價、飛比、人工等）
+  </div>
+</div>
+
+<div class="filters card">
+  <form method="GET" action="/observations" style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label for="product_id" style="font-size:12px;color:#666;">篩選商品</label>
+      <select name="product_id" id="product_id" style="padding:6px;border:1px solid #ccc;border-radius:4px;background:#fff;min-width:200px;" onchange="this.form.submit()">
+        <option value="">全部商品</option>
+        {% for p in products %}
+          <option value="{{ p.id }}" {% if filter_product_id == p.id %}selected{% endif %}>{{ p.product_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if filter_product_id %}
+      <a href="/observations" class="btn btn-secondary">清除篩選</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card" style="overflow-x:auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>時間</th>
+        <th>商品</th>
+        <th>平台</th>
+        <th>來源</th>
+        <th>賣場標題</th>
+        <th>價格</th>
+        <th>狀態</th>
+        <th>分數</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for obs in observations %}
+      <tr>
+        <td style="white-space:nowrap;font-size:12px;color:#666;">
+          {{ obs.observed_at[:16] }}
+        </td>
+        <td>{{ obs.product_name }}</td>
+        <td><span class="badge" style="background:#e0e0e0;color:#333;">{{ obs.platform }}</span></td>
+        <td>
+          {% if obs.source == 'direct_html' %}
+            <span class="badge" style="background:#e3f2fd;color:#1565c0;">Direct</span>
+          {% elif obs.source == 'feebee' %}
+            <span class="badge" style="background:#fff3e0;color:#e65100;">Feebee</span>
+          {% elif obs.source == 'manual' %}
+            <span class="badge" style="background:#f3e5f5;color:#6a1b9a;">Manual</span>
+          {% else %}
+            <span class="badge">{{ obs.source }}</span>
+          {% endif %}
+        </td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ obs.title }}">
+          {% if obs.url %}
+            <a href="{{ obs.url | canonical_url }}" target="_blank">{{ obs.title or '(無標題)' }}</a>
+          {% else %}
+            {{ obs.title or '(無標題)' }}
+          {% endif %}
+        </td>
+        <td>
+          {% if obs.price %}
+            <strong>${{ obs.price|int }}</strong>
+          {% else %}
+            -
+          {% endif %}
+        </td>
+        <td>
+          {% if obs.status == 'success' %}
+            <span class="badge badge-normal">成功</span>
+          {% elif obs.status == 'price_unknown' %}
+            <span class="badge badge-unknown">未知</span>
+          {% elif obs.status == 'rate_limited' %}
+            <span class="badge badge-warning">被擋</span>
+          {% else %}
+            <span class="badge badge-error">{{ obs.status }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if obs.match_score > 0 %}
+            <span style="font-size:12px;{% if obs.match_score >= 80 %}color:green;{% else %}color:orange;{% endif %}">
+              {{ obs.match_score }} / {{ (obs.confidence * 100)|int }}%
+            </span>
+          {% else %}
+            -
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8" style="text-align:center;padding:32px;color:#666;">無觀測紀錄</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-row">
+  <h2>平台健康度追蹤</h2>
+  <div style="font-size: 14px; color: #666;">
+    顯示各平台與來源的成功率與冷卻狀態。
+  </div>
+</div>
+
+<div class="card" style="overflow-x:auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>來源</th>
+        <th>平台</th>
+        <th>總請求數</th>
+        <th>成功</th>
+        <th>失敗</th>
+        <th>被阻擋</th>
+        <th>成功率</th>
+        <th>狀態</th>
+        <th>冷卻結束時間</th>
+        <th>上次更新</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in health_stats %}
+      <tr>
+        <td>
+          {% if s.source == 'direct_html' %}
+            <span class="badge" style="background:#e3f2fd;color:#1565c0;">Direct</span>
+          {% elif s.source == 'feebee' %}
+            <span class="badge" style="background:#fff3e0;color:#e65100;">Feebee</span>
+          {% else %}
+            <span class="badge">{{ s.source }}</span>
+          {% endif %}
+        </td>
+        <td><span class="badge" style="background:#e0e0e0;color:#333;">{{ s.platform }}</span></td>
+        <td>
+          {% set total = s.success_count_24h + s.error_count_24h + s.blocked_count_24h + s.rate_limited_count_24h %}
+          {{ total }}
+        </td>
+        <td style="color:green;">{{ s.success_count_24h }}</td>
+        <td style="color:red;">{{ s.error_count_24h }}</td>
+        <td style="color:orange;">{{ s.blocked_count_24h + s.rate_limited_count_24h }}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:60px;height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden;">
+              <div style="width:{{ s.success_rate_24h * 100 }}%;height:100%;background:{% if s.success_rate_24h > 0.8 %}#4caf50{% elif s.success_rate_24h > 0.5 %}#ff9800{% else %}#f44336{% endif %};"></div>
+            </div>
+            <span style="font-size:12px;">{{ (s.success_rate_24h * 100)|int }}%</span>
+          </div>
+        </td>
+        <td>
+          {% if s.enabled and not s.cooldown_until %}
+            <span class="badge badge-normal">運作中</span>
+          {% else %}
+            <span class="badge badge-error">冷卻中</span>
+          {% endif %}
+        </td>
+        <td style="font-size:12px;color:#666;">
+          {{ s.cooldown_until[:16] if s.cooldown_until else '-' }}
+        </td>
+        <td style="font-size:12px;color:#666;">
+          {{ s.updated_at[:16] }}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="10" style="text-align:center;padding:32px;color:#666;">無健康度紀錄</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

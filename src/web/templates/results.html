@@ -4,9 +4,10 @@
   <div class="section-head">
     <h2>{{ title }} ({{ snapshots|length }} 筆)</h2>
   </div>
-  <div style="margin-bottom:12px;display:flex;gap:8px">
+  <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
     <a class="button {{ 'primary' if not filter_status else '' }}" href="/monitor/results">全部</a>
-    <a class="button {{ 'primary' if filter_status == 'suspected_violation' else '' }}" href="/monitor/results?status=suspected_violation">疑似破價</a>
+    <a class="button {{ 'primary' if filter_status == 'suspected_violation' else '' }}" href="/monitor/results?status=suspected_violation">監控中</a>
+    <a class="button {{ 'primary' if filter_status == 'takedown_notified' else '' }}" href="/monitor/results?status=takedown_notified">取消監控</a>
     <a class="button {{ 'primary' if filter_status == 'price_unknown' else '' }}" href="/monitor/results?status=price_unknown">未抓到價格</a>
     <a class="button {{ 'primary' if filter_status == 'error' else '' }}" href="/monitor/results?status=error">錯誤</a>
     <a class="button {{ 'primary' if filter_status == 'normal' else '' }}" href="/monitor/results?status=normal">正常</a>
@@ -24,15 +25,16 @@
         <th>賣家</th>
         <th>網址</th>
         <th>檢查時間</th>
+        <th>操作</th>
       </tr>
     </thead>
     <tbody>
     {% for s in snapshots %}
-      <tr class="{{ 'danger-row' if s.is_violation else '' }}">
+      <tr id="row-{{ s.candidate_id }}" class="{{ 'danger-row' if s.is_violation else '' }}">
         <td>{{ s.product_name[:20] }}</td>
         <td>{{ s.platform }}</td>
-        <td>{{ s.suggested_price if s.suggested_price is not none else '-' }}</td>
-        <td>{{ s.price if s.price is not none else '-' }}</td>
+        <td>{{ s.suggested_price|int if s.suggested_price is not none else '-' }}</td>
+        <td>{{ s.price|int if s.price is not none else '-' }}</td>
         <td>
           {% set raw = s.raw_data|fromjson if s.raw_data else {} %}
           {% set p_src = raw.get('price_source', 'dom') %}
@@ -45,17 +47,40 @@
           {% endif %}
         </td>
         <td class="{{ 'danger' if s.price_diff is not none and s.price_diff < 0 else '' }}">
-          {{ s.price_diff if s.price_diff is not none else '-' }}
+          {{ s.price_diff|int if s.price_diff is not none else '-' }}
         </td>
         <td>{{ s.candidate_status|status_label }}</td>
         <td>{{ s.seller[:10] }}</td>
         <td>
-          <a href="{{ s.url }}" target="_blank" style="text-decoration:none;">商品連結</a>
+          <a href="{{ s.url | canonical_url }}" target="_blank" style="text-decoration:none;">商品連結</a>
         </td>
         <td>{{ s.checked_at|format_tz }}</td>
+        <td style="white-space:nowrap;display:flex;gap:4px;">
+          {% if s.candidate_status != 'takedown_notified' %}
+            <form method="post" action="/candidates/{{ s.candidate_id }}/takedown" style="display:inline"
+                  onsubmit="return confirm('確定取消對此網址的監控嗎？')">
+              <button type="submit" class="small" style="background:#e65100;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="標記為已處理 / 取消監控">
+                ❌ 取消監控
+              </button>
+            </form>
+            <form method="post" action="/candidates/{{ s.candidate_id }}/disable" style="display:inline"
+                  onsubmit="return confirm('確定要從系統中刪除並忽略此網址嗎？')">
+              <button type="submit" class="small" style="background:#dc3545;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="永久刪除/忽略此商品">
+                🗑️ 刪除
+              </button>
+            </form>
+          {% else %}
+            <form method="post" action="/candidates/{{ s.candidate_id }}/restore_violation" style="display:inline"
+                  onsubmit="return confirm('確定恢復監控此網址嗎？')">
+              <button type="submit" class="small" style="background:#2e7d32;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="恢復對此商品的監控">
+                ✅ 恢復監控
+              </button>
+            </form>
+          {% endif %}
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="9">尚無監測結果</td></tr>
+      <tr><td colspan="11">尚無監測結果</td></tr>
     {% endfor %}
     </tbody>
   </table>

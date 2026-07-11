@@ -45,11 +45,12 @@ CREATE TABLE IF NOT EXISTS product_candidates (
     last_price REAL,
     status TEXT DEFAULT 'active'
         CHECK(status IN ('active','normal','suspected_violation',
-                         'price_unknown','excluded','error','inactive','blocked')),
+                         'price_unknown','excluded','error','inactive','blocked',
+                         'takedown_notified')),
     source_found_by TEXT DEFAULT 'manual'
         CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                    'crawler','mcp','findprice','shopee',
-                                   'findprice_shopee')),
+                                   'findprice_shopee','feebee','biggo','lbj','fallback')),
     raw_data TEXT DEFAULT '{}'
 );
 
@@ -88,6 +89,51 @@ CREATE TABLE IF NOT EXISTS global_exclusions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     keyword TEXT NOT NULL UNIQUE,
     created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS price_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    candidate_id INTEGER REFERENCES product_candidates(id),
+    platform TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'direct_html'
+        CHECK(source IN ('direct_dom','direct_json','direct_html',
+                         'feebee','visual_ocr','manual','third_party',
+                         'biggo','lbj','fallback')),
+    url TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    seller TEXT NOT NULL DEFAULT '',
+    price REAL,
+    currency TEXT NOT NULL DEFAULT 'TWD',
+    match_score INTEGER DEFAULT 0,
+    confidence REAL DEFAULT 0.0,
+    status TEXT NOT NULL DEFAULT 'success'
+        CHECK(status IN ('success','blocked','captcha_required','traffic_verify',
+                         'rate_limited','source_dead','price_unknown',
+                         'excluded','error','skipped_direct_crawl')),
+    error_message TEXT NOT NULL DEFAULT '',
+    raw_data TEXT NOT NULL DEFAULT '{}',
+    observed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_product ON price_observations(product_id);
+CREATE INDEX IF NOT EXISTS idx_observations_candidate ON price_observations(candidate_id);
+CREATE INDEX IF NOT EXISTS idx_observations_observed ON price_observations(observed_at);
+
+CREATE TABLE IF NOT EXISTS source_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT '',
+    success_count_24h INTEGER NOT NULL DEFAULT 0,
+    error_count_24h INTEGER NOT NULL DEFAULT 0,
+    blocked_count_24h INTEGER NOT NULL DEFAULT 0,
+    rate_limited_count_24h INTEGER NOT NULL DEFAULT 0,
+    success_rate_24h REAL NOT NULL DEFAULT 0.0,
+    last_success_at TEXT,
+    cooldown_until TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_name, platform)
 );
 """
 
@@ -158,6 +204,11 @@ class SnapshotRow:
     screenshot_path: str = ""
     error_message: str = ""
     raw_data: str = "{}"
+    final_price: float | None = None
+    final_price_source: str = ""
+    final_confidence: float = 0.0
+    final_status: str = ""
+    decision_reason: str = ""
     # joined fields
     product_name: str = ""
     platform: str = ""
@@ -180,6 +231,45 @@ class ApiUsageRow:
     success: bool = True
     error_message: str = ""
     purpose: str = ""
+
+
+@dataclass
+class ObservationRow:
+    id: int = 0
+    product_id: int = 0
+    candidate_id: int | None = None
+    platform: str = ""
+    source: str = "direct_html"
+    url: str = ""
+    title: str = ""
+    seller: str = ""
+    price: float | None = None
+    currency: str = "TWD"
+    match_score: int = 0
+    confidence: float = 0.0
+    status: str = "success"
+    error_message: str = ""
+    raw_data: str = "{}"
+    observed_at: str = ""
+    # joined fields
+    product_name: str = ""
+    suggested_price: float | None = None
+
+
+@dataclass
+class SourceHealthRow:
+    id: int = 0
+    source_name: str = ""
+    platform: str = ""
+    success_count_24h: int = 0
+    error_count_24h: int = 0
+    blocked_count_24h: int = 0
+    rate_limited_count_24h: int = 0
+    success_rate_24h: float = 0.0
+    last_success_at: str = ""
+    cooldown_until: str = ""
+    enabled: bool = True
+    updated_at: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +314,9 @@ class Database:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT DEFAULT ''")
             self._migrate_candidate_source_constraint(conn)
+            self._migrate_candidate_takedown_status(conn)
+            self._migrate_snapshot_final_price(conn)
+            self._migrate_candidate_multi_source(conn)
             conn.commit()
         finally:
             conn.close()
@@ -253,7 +346,8 @@ class Database:
                 last_price REAL,
                 status TEXT DEFAULT 'active'
                     CHECK(status IN ('active','normal','suspected_violation',
-                                     'price_unknown','excluded','error','inactive','blocked')),
+                                     'price_unknown','excluded','error','inactive','blocked',
+                                     'takedown_notified')),
                 source_found_by TEXT DEFAULT 'manual'
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
@@ -282,6 +376,61 @@ class Database:
             """
         )
         conn.execute("DROP TABLE product_candidates_backup")
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_candidates_product ON product_candidates(product_id);
+            CREATE INDEX IF NOT EXISTS idx_candidates_status ON product_candidates(status);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    def _migrate_candidate_takedown_status(self, conn: sqlite3.Connection) -> None:
+        """Add takedown_notified to the status CHECK constraint if missing."""
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='product_candidates'"
+        ).fetchone()
+        if not row or "takedown_notified" in (row["sql"] or ""):
+            return
+
+        LOGGER.info("Migrating product_candidates: adding takedown_notified status")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("CREATE TEMP TABLE _pc_backup AS SELECT * FROM product_candidates")
+        conn.execute("DROP TABLE product_candidates")
+        conn.execute(
+            """
+            CREATE TABLE product_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                platform TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                url TEXT NOT NULL UNIQUE,
+                seller TEXT DEFAULT '',
+                first_seen_at TEXT DEFAULT (datetime('now')),
+                last_checked_at TEXT,
+                last_price REAL,
+                status TEXT DEFAULT 'active'
+                    CHECK(status IN ('active','normal','suspected_violation',
+                                     'price_unknown','excluded','error','inactive','blocked',
+                                     'takedown_notified')),
+                source_found_by TEXT DEFAULT 'manual'
+                    CHECK(source_found_by IN ('manual','serper','serpapi','brave',
+                                               'crawler','mcp','findprice','shopee',
+                                               'findprice_shopee')),
+                raw_data TEXT DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO product_candidates
+                (id, product_id, platform, title, url, seller, first_seen_at,
+                 last_checked_at, last_price, status, source_found_by, raw_data)
+            SELECT id, product_id, platform, title, url, seller, first_seen_at,
+                   last_checked_at, last_price, status, source_found_by, raw_data
+            FROM _pc_backup
+            """
+        )
+        conn.execute("DROP TABLE _pc_backup")
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_candidates_product ON product_candidates(product_id);
@@ -433,7 +582,7 @@ class Database:
                 SELECT c.*, p.product_name, p.suggested_price, p.brand
                 FROM product_candidates c
                 JOIN products p ON c.product_id = p.id
-                WHERE c.status IN ('active','normal','suspected_violation','price_unknown')
+                WHERE c.status IN ('active','normal','suspected_violation','price_unknown','takedown_notified')
                   AND p.is_active = 1
             """
             params: list[Any] = []
@@ -468,6 +617,18 @@ class Database:
             sql += " ORDER BY p.product_name, c.platform"
             cur.execute(sql, params)
             return [self._to_candidate(r) for r in cur.fetchall()]
+
+    def disable_obsolete_findprice_urls(self) -> int:
+        """Mark old FindPrice 'go' URLs as source_dead."""
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """UPDATE product_candidates
+                   SET status = 'source_dead'
+                   WHERE url LIKE '%findprice.com.tw/go/%'
+                   AND status != 'source_dead'"""
+            )
+            count = cur.rowcount
+            return count
 
     def update_candidate_status(
         self,
@@ -541,25 +702,44 @@ class Database:
         date: str | None = None,
         violation_only: bool = False,
         limit: int = 500,
+        latest_only: bool = True,
     ) -> list[SnapshotRow]:
         with self._cursor() as (conn, cur):
-            sql = """
-                SELECT s.*, p.product_name, p.brand,
-                       c.platform, c.url, c.seller, c.title,
-                       c.status AS candidate_status,
-                       c.source_found_by, c.first_seen_at
-                FROM price_snapshots s
-                JOIN product_candidates c ON s.candidate_id = c.id
-                JOIN products p ON s.product_id = p.id
-                WHERE c.status != 'excluded'
-            """
+            if latest_only:
+                sql = """
+                    WITH RankedSnapshots AS (
+                        SELECT s.*, p.product_name, p.brand,
+                               c.platform, c.url, c.seller, c.title,
+                               c.status AS candidate_status,
+                               c.source_found_by, c.first_seen_at,
+                               ROW_NUMBER() OVER(PARTITION BY s.candidate_id ORDER BY s.checked_at DESC) as rn
+                        FROM price_snapshots s
+                        JOIN product_candidates c ON s.candidate_id = c.id
+                        JOIN products p ON s.product_id = p.id
+                        WHERE c.status != 'excluded'
+                    )
+                    SELECT * FROM RankedSnapshots
+                    WHERE rn = 1
+                """
+            else:
+                sql = """
+                    SELECT s.*, p.product_name, p.brand,
+                           c.platform, c.url, c.seller, c.title,
+                           c.status AS candidate_status,
+                           c.source_found_by, c.first_seen_at
+                    FROM price_snapshots s
+                    JOIN product_candidates c ON s.candidate_id = c.id
+                    JOIN products p ON s.product_id = p.id
+                    WHERE c.status != 'excluded'
+                """
+            
             params: list[Any] = []
             if date:
-                sql += " AND s.checked_at LIKE ?"
+                sql += " AND checked_at LIKE ?"
                 params.append(f"{date}%")
             if violation_only:
-                sql += " AND s.is_violation = 1"
-            sql += " ORDER BY s.checked_at DESC LIMIT ?"
+                sql += " AND is_violation = 1"
+            sql += " ORDER BY checked_at DESC LIMIT ?"
             params.append(limit)
             cur.execute(sql, params)
             return [self._to_snapshot(r) for r in cur.fetchall()]
@@ -579,6 +759,11 @@ class Database:
             screenshot_path=row["screenshot_path"] or "",
             error_message=row["error_message"] or "",
             raw_data=row["raw_data"] or "{}",
+            final_price=row["final_price"] if "final_price" in keys else None,
+            final_price_source=row["final_price_source"] if "final_price_source" in keys else "",
+            final_confidence=row["final_confidence"] if "final_confidence" in keys else 0.0,
+            final_status=row["final_status"] if "final_status" in keys else "",
+            decision_reason=row["decision_reason"] if "decision_reason" in keys else "",
             product_name=row["product_name"] if "product_name" in keys else "",
             platform=row["platform"] if "platform" in keys else "",
             url=row["url"] if "url" in keys else "",
@@ -701,16 +886,19 @@ class Database:
         with self._cursor() as (conn, cur):
             cur.execute(
                 """
-                SELECT c.*, p.product_name, p.suggested_price, p.brand
+                SELECT c.*, p.product_name, p.suggested_price, p.brand,
+                       (SELECT raw_data FROM price_snapshots s WHERE s.candidate_id = c.id ORDER BY checked_at DESC LIMIT 1) as latest_snap_raw,
+                       (SELECT error_message FROM price_snapshots s WHERE s.candidate_id = c.id ORDER BY checked_at DESC LIMIT 1) as latest_snap_err
                 FROM product_candidates c
                 JOIN products p ON c.product_id = p.id
                 WHERE c.status != 'excluded'
                 """
             )
-            candidates = [self._to_candidate(row) for row in cur.fetchall()]
-            matched_ids = [
-                candidate.id
-                for candidate in candidates
+            # Fetch all rows directly and convert to list of dicts to keep the extra columns
+            rows = cur.fetchall()
+            candidates = [self._to_candidate(row) for row in rows]
+            matched_ids = []
+            for candidate, row in zip(candidates, rows):
                 if _matches_keyword(
                     keyword,
                     (
@@ -720,9 +908,12 @@ class Database:
                         candidate.url,
                         candidate.brand,
                         candidate.raw_data,
+                        row["latest_snap_raw"],
+                        row["latest_snap_err"],
                     ),
-                )
-            ]
+                ):
+                    matched_ids.append(candidate.id)
+                    
             if not matched_ids:
                 return 0
 
@@ -765,7 +956,7 @@ class Database:
             products = cur.fetchone()["c"]
             cur.execute(
                 """SELECT COUNT(*) AS c FROM product_candidates
-                   WHERE status IN ('active','normal','suspected_violation','price_unknown')"""
+                   WHERE status IN ('active','normal','suspected_violation','price_unknown','takedown_notified')"""
             )
             active_candidates = cur.fetchone()["c"]
             cur.execute(
@@ -777,6 +968,10 @@ class Database:
             )
             price_unknown = cur.fetchone()["c"]
             cur.execute(
+                "SELECT COUNT(*) AS c FROM product_candidates WHERE status='takedown_notified'"
+            )
+            takedown_notified = cur.fetchone()["c"]
+            cur.execute(
                 "SELECT MAX(checked_at) AS last FROM price_snapshots"
             )
             last_row = cur.fetchone()
@@ -786,5 +981,267 @@ class Database:
                 "active_candidates": active_candidates,
                 "violations": violations,
                 "price_unknown": price_unknown,
+                "takedown_notified": takedown_notified,
                 "last_check_time": last_check or "",
             }
+
+    # -- Migrations (new) ---------------------------------------------------
+
+    def _migrate_snapshot_final_price(self, conn: sqlite3.Connection) -> None:
+        """Add final_price columns to price_snapshots if missing."""
+        existing = {r[1] for r in conn.execute('PRAGMA table_info(price_snapshots)').fetchall()}
+        new_cols = {
+            'final_price': 'REAL',
+            'final_price_source': "TEXT DEFAULT ''",
+            'final_confidence': 'REAL DEFAULT 0.0',
+            'final_status': "TEXT DEFAULT ''",
+            'decision_reason': "TEXT DEFAULT ''",
+        }
+        for col, col_type in new_cols.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE price_snapshots ADD COLUMN {col} {col_type}")
+                LOGGER.info("Migration: added %s to price_snapshots", col)
+
+    def _migrate_candidate_multi_source(self, conn: sqlite3.Connection) -> None:
+        """Expand product_candidates status and source_found_by CHECK constraints
+        to include multi-source values (source_dead, rate_limited, feebee, etc.)."""
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='product_candidates'"
+        ).fetchone()
+        if not row:
+            return
+        schema_sql = row["sql"] or ""
+        # Already migrated if 'source_dead' and 'feebee' are present
+        if "source_dead" in schema_sql and "feebee" in schema_sql:
+            return
+
+        LOGGER.info("Migration: expanding product_candidates for multi-source support")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("CREATE TEMP TABLE _pc_ms_backup AS SELECT * FROM product_candidates")
+        conn.execute("DROP TABLE product_candidates")
+        conn.execute(
+            """
+            CREATE TABLE product_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                platform TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                url TEXT NOT NULL,
+                seller TEXT DEFAULT '',
+                first_seen_at TEXT DEFAULT (datetime('now')),
+                last_checked_at TEXT,
+                last_price REAL,
+                status TEXT DEFAULT 'active'
+                    CHECK(status IN ('active','normal','suspected_violation',
+                                     'price_unknown','excluded','error','inactive','blocked',
+                                     'takedown_notified','source_dead','rate_limited',
+                                     'captcha_required','skipped')),
+                source_found_by TEXT DEFAULT 'manual'
+                    CHECK(source_found_by IN ('manual','serper','serpapi','brave',
+                                               'crawler','mcp','findprice','shopee',
+                                               'findprice_shopee','feebee')),
+                raw_data TEXT DEFAULT '{}',
+                UNIQUE(product_id, url)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO product_candidates
+                (id, product_id, platform, title, url, seller, first_seen_at,
+                 last_checked_at, last_price, status, source_found_by, raw_data)
+            SELECT id, product_id, platform, title, url, seller, first_seen_at,
+                   last_checked_at, last_price, status, source_found_by, raw_data
+            FROM _pc_ms_backup
+            """
+        )
+        conn.execute("DROP TABLE _pc_ms_backup")
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_candidates_product ON product_candidates(product_id);
+            CREATE INDEX IF NOT EXISTS idx_candidates_status ON product_candidates(status);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    # -- Price Observations -------------------------------------------------
+
+    def insert_observation(
+        self,
+        product_id: int,
+        candidate_id: int | None,
+        platform: str,
+        source: str,
+        url: str = "",
+        title: str = "",
+        seller: str = "",
+        price: float | None = None,
+        currency: str = "TWD",
+        match_score: int = 0,
+        confidence: float = 0.0,
+        status: str = "success",
+        error_message: str = "",
+        raw_data: dict[str, Any] | None = None,
+    ) -> int:
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """INSERT INTO price_observations
+                   (product_id, candidate_id, platform, source, url, title,
+                    seller, price, currency, match_score, confidence,
+                    status, error_message, raw_data)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (product_id, candidate_id, platform, source, url, title,
+                 seller, price, currency, match_score, confidence,
+                 status, error_message,
+                 json.dumps(raw_data or {}, ensure_ascii=False)),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def get_observations(
+        self,
+        product_id: int | None = None,
+        since: str | None = None,
+        limit: int = 500,
+    ) -> list[ObservationRow]:
+        with self._cursor() as (conn, cur):
+            sql = """
+                SELECT o.*, p.product_name, p.suggested_price
+                FROM price_observations o
+                JOIN products p ON o.product_id = p.id
+                WHERE 1=1
+            """
+            params: list[Any] = []
+            if product_id is not None:
+                sql += " AND o.product_id = ?"
+                params.append(product_id)
+            if since:
+                sql += " AND o.observed_at >= ?"
+                params.append(since)
+            sql += " ORDER BY o.observed_at DESC LIMIT ?"
+            params.append(limit)
+            cur.execute(sql, params)
+            return [self._to_observation(r) for r in cur.fetchall()]
+
+    def get_observations_for_decision(
+        self, product_id: int, run_time: str | None = None
+    ) -> list[ObservationRow]:
+        """Get the most recent observations for final price decision."""
+        since = run_time or _now_iso()[:10]  # today
+        return self.get_observations(product_id=product_id, since=since, limit=100)
+
+    @staticmethod
+    def _to_observation(row: sqlite3.Row) -> ObservationRow:
+        keys = row.keys()
+        return ObservationRow(
+            id=row["id"],
+            product_id=row["product_id"],
+            candidate_id=row["candidate_id"],
+            platform=row["platform"] or "",
+            source=row["source"] or "direct_html",
+            url=row["url"] or "",
+            title=row["title"] or "",
+            seller=row["seller"] or "",
+            price=row["price"],
+            currency=row["currency"] or "TWD",
+            match_score=row["match_score"] or 0,
+            confidence=row["confidence"] or 0.0,
+            status=row["status"] or "success",
+            error_message=row["error_message"] or "",
+            raw_data=row["raw_data"] or "{}",
+            observed_at=row["observed_at"] or "",
+            product_name=row["product_name"] if "product_name" in keys else "",
+            suggested_price=row["suggested_price"] if "suggested_price" in keys else None,
+        )
+
+    def update_snapshot_final_price(
+        self,
+        snapshot_id: int,
+        final_price: float | None,
+        final_price_source: str,
+        final_confidence: float,
+        final_status: str,
+        decision_reason: str,
+    ) -> None:
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """UPDATE price_snapshots
+                   SET final_price=?, final_price_source=?,
+                       final_confidence=?, final_status=?, decision_reason=?
+                   WHERE id=?""",
+                (final_price, final_price_source, final_confidence,
+                 final_status, decision_reason, snapshot_id),
+            )
+
+    # -- Source Health -------------------------------------------------------
+
+    def upsert_source_health(
+        self,
+        source_name: str,
+        platform: str,
+        success_count_24h: int = 0,
+        error_count_24h: int = 0,
+        blocked_count_24h: int = 0,
+        rate_limited_count_24h: int = 0,
+        last_success_at: str = "",
+        cooldown_until: str = "",
+        enabled: bool = True,
+    ) -> None:
+        total = success_count_24h + error_count_24h + blocked_count_24h + rate_limited_count_24h
+        rate = round(success_count_24h / total, 4) if total > 0 else 0.0
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """INSERT INTO source_health
+                   (source_name, platform, success_count_24h, error_count_24h,
+                    blocked_count_24h, rate_limited_count_24h, success_rate_24h,
+                    last_success_at, cooldown_until, enabled, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(source_name, platform) DO UPDATE SET
+                    success_count_24h=excluded.success_count_24h,
+                    error_count_24h=excluded.error_count_24h,
+                    blocked_count_24h=excluded.blocked_count_24h,
+                    rate_limited_count_24h=excluded.rate_limited_count_24h,
+                    success_rate_24h=excluded.success_rate_24h,
+                    last_success_at=CASE WHEN excluded.last_success_at != '' THEN excluded.last_success_at ELSE source_health.last_success_at END,
+                    cooldown_until=excluded.cooldown_until,
+                    enabled=excluded.enabled,
+                    updated_at=excluded.updated_at""",
+                (source_name, platform, success_count_24h, error_count_24h,
+                 blocked_count_24h, rate_limited_count_24h, rate,
+                 last_success_at, cooldown_until, enabled, _now_iso()),
+            )
+
+    def get_source_health(self) -> list[SourceHealthRow]:
+        with self._cursor() as (conn, cur):
+            cur.execute("SELECT * FROM source_health ORDER BY source_name, platform")
+            return [
+                SourceHealthRow(
+                    id=r["id"],
+                    source_name=r["source_name"],
+                    platform=r["platform"] or "",
+                    success_count_24h=r["success_count_24h"] or 0,
+                    error_count_24h=r["error_count_24h"] or 0,
+                    blocked_count_24h=r["blocked_count_24h"] or 0,
+                    rate_limited_count_24h=r["rate_limited_count_24h"] or 0,
+                    success_rate_24h=r["success_rate_24h"] or 0.0,
+                    last_success_at=r["last_success_at"] or "",
+                    cooldown_until=r["cooldown_until"] or "",
+                    enabled=bool(r["enabled"]),
+                    updated_at=r["updated_at"] or "",
+                )
+                for r in cur.fetchall()
+            ]
+
+    def disable_findprice_candidates(self) -> int:
+        """Mark all findprice.com.tw/go/ candidates as source_dead."""
+        with self._cursor() as (conn, cur):
+            cur.execute(
+                """UPDATE product_candidates
+                   SET status='source_dead', last_checked_at=?
+                   WHERE url LIKE '%findprice.com.tw/go/%'
+                     AND status NOT IN ('excluded','source_dead')""",
+                (_now_iso(),),
+            )
+            count = cur.rowcount
+            LOGGER.info("Disabled %d FindPrice candidates as source_dead", count)
+            return count
+

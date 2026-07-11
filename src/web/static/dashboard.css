@@ -325,6 +325,10 @@ button,
   background: var(--danger-bg);
 }
 
+.warning-row {
+  background: var(--warning-bg);
+}
+
 .danger {
   color: var(--danger);
   font-weight: 600;

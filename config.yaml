@@ -22,6 +22,11 @@ platforms:
 # Brave: https://api.search.brave.com/ (免費 ~1000次/月)
 search_cache_hours: 24
 
+# Shopee browser profile 設定
+# 首次使用請先執行: python tools/setup_shopee_profile.py
+shopee_profile_dir: data/browser_profiles/shopee
+shopee_headless: false
+
 notification:
   enabled: false
   only_when_violation: true
@@ -36,3 +41,78 @@ notification:
     enabled: false
     channel_access_token: ""
     user_ids: []
+
+# 防封鎖設定
+# ============================================================
+# 方案 1（推薦）: ScraperAPI — 免費 5000 次/月，自動處理代理和驗證碼
+#   1. 免費申請: https://www.scraperapi.com/signup
+#   2. 取得 API Key 後填入 .env 檔:  SCRAPERAPI_KEY=你的key
+#   3. 當直接抓取被 429/403 封鎖時，會自動走 ScraperAPI 備援
+#
+# 方案 2: 自備代理 IP
+#   proxy_url: "http://user:pass@host:port"  或 "socks5://host:port"
+proxy_url: ""
+# 只對特定平台使用代理（留空=全部平台都走代理）
+proxy_platforms:
+  - pchome
+
+# ============================================================
+# 多來源觀測設定
+# ============================================================
+
+# Shopee 策略：不直接爬蝦皮，改用 Feebee 查價
+shopee_direct_daily_crawl_enabled: false
+shopee_use_feebee_fallback: true
+shopee_stop_on_captcha: true
+shopee_mark_blocked_as_manual_review: true
+
+# OCR 設定（Tesseract 未安裝時設 false 避免洗錯誤）
+ocr_enabled: false
+ocr_engine: tesseract
+ocr_fail_silently: true
+
+platform_rate_limits:
+  default:
+    concurrency: 1
+    min_delay_seconds: 8
+    random_jitter_seconds: 5
+    cooldown_after_429_minutes: 60
+    max_retry_per_run: 0
+
+  pchome:
+    concurrency: 1
+    min_delay_seconds: 12
+    random_jitter_seconds: 8
+    cooldown_after_429_minutes: 90
+    max_retry_per_run: 0
+
+  momo:
+    concurrency: 1
+    min_delay_seconds: 8
+    random_jitter_seconds: 5
+    cooldown_after_429_minutes: 60
+    max_retry_per_run: 0
+
+  ruten:
+    concurrency: 1
+    min_delay_seconds: 6
+    random_jitter_seconds: 4
+    cooldown_after_429_minutes: 45
+    max_retry_per_run: 0
+
+  yahoo:
+    concurrency: 1
+    min_delay_seconds: 8
+    random_jitter_seconds: 5
+    cooldown_after_429_minutes: 60
+    max_retry_per_run: 0
+
+  shopee:
+    direct_daily_crawl_enabled: false
+    concurrency: 1
+    min_delay_seconds: 30
+    random_jitter_seconds: 20
+    cooldown_after_429_minutes: 1440
+    max_retry_per_run: 0
+    use_feebee_as_primary_fallback: true
+

@@ -34,6 +34,38 @@ class AppConfig:
     shopee_timeout_seconds: int = 60
     shopee_max_retries: int = 1
 
+    # Shopee persistent browser profile
+    shopee_profile_dir: str = "data/browser_profiles/shopee"
+    shopee_headless: bool = False
+
+    # Proxy settings
+    proxy_url: str = ""  # e.g. http://user:pass@host:port or socks5://host:port
+    proxy_platforms: list[str] = field(
+        default_factory=list  # empty = proxy ALL platforms; ["pchome","momo"] = only these
+    )
+
+    # --- Multi-source observation settings ---
+
+    # Shopee strategy: skip direct crawl, use Feebee as primary source
+    shopee_direct_daily_crawl_enabled: bool = False
+    shopee_use_feebee_fallback: bool = True
+    shopee_stop_on_captcha: bool = True
+    shopee_mark_blocked_as_manual_review: bool = True
+
+    # OCR settings
+    ocr_enabled: bool = False
+    ocr_engine: str = "tesseract"
+    ocr_fail_silently: bool = True
+
+    platform_rate_limits: dict[str, Any] = field(default_factory=lambda: {
+        "default": {"concurrency": 1, "min_delay_seconds": 8, "random_jitter_seconds": 5, "cooldown_after_429_minutes": 60, "max_retry_per_run": 0},
+        "pchome": {"concurrency": 1, "min_delay_seconds": 12, "random_jitter_seconds": 8, "cooldown_after_429_minutes": 90, "max_retry_per_run": 0},
+        "momo": {"concurrency": 1, "min_delay_seconds": 8, "random_jitter_seconds": 5, "cooldown_after_429_minutes": 60, "max_retry_per_run": 0},
+        "ruten": {"concurrency": 1, "min_delay_seconds": 6, "random_jitter_seconds": 4, "cooldown_after_429_minutes": 45, "max_retry_per_run": 0},
+        "yahoo": {"concurrency": 1, "min_delay_seconds": 8, "random_jitter_seconds": 5, "cooldown_after_429_minutes": 60, "max_retry_per_run": 0},
+        "shopee": {"concurrency": 1, "min_delay_seconds": 30, "random_jitter_seconds": 20, "cooldown_after_429_minutes": 1440, "max_retry_per_run": 0, "direct_daily_crawl_enabled": False, "use_feebee_as_primary_fallback": True},
+    })
+
 
 def _parse_scalar(value: str) -> Any:
     value = value.strip()
@@ -137,13 +169,24 @@ def load_config(path: Path) -> AppConfig:
         ("SHOPEE_THIRD_PARTY_API_KEY", "shopee_third_party_api_key"),
         ("SHOPEE_TIMEOUT_SECONDS", "shopee_timeout_seconds"),
         ("SHOPEE_MAX_RETRIES", "shopee_max_retries"),
+        ("SHOPEE_PROFILE_DIR", "shopee_profile_dir"),
+        ("SHOPEE_HEADLESS", "shopee_headless"),
     ]:
         env_val = os.environ.get(env_key, "").strip()
         if env_val:
-            setattr(config, attr_name, type(getattr(config, attr_name))(env_val))
+            field_type = type(getattr(config, attr_name))
+            if field_type is bool:
+                setattr(config, attr_name, env_val.lower() in ("true", "1", "yes"))
+            else:
+                setattr(config, attr_name, field_type(env_val))
             os.environ.setdefault(env_key, env_val)
         else:
             # Push config defaults into env for provider chain to read
             os.environ.setdefault(env_key, str(getattr(config, attr_name)))
+
+    # Proxy env var override
+    env_proxy = os.environ.get("PROXY_URL", "").strip()
+    if env_proxy:
+        config.proxy_url = env_proxy
 
     return config

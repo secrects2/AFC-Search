@@ -15,6 +15,7 @@ ENV/
 
 # Environment variables
 .env
+cloudflared.local.yml
 
 # IDE
 .vscode/

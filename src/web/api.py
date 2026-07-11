@@ -40,14 +40,78 @@ def format_tz(iso_str: str) -> str:
         return iso_str[:16]
 
 def status_label(status: str) -> str:
+    from markupsafe import Markup
     mapping = {
         "normal": "正常",
-        "suspected_violation": "疑似破價",
+        "suspected_violation": "監控中",
         "price_unknown": "未抓到價格",
         "error": "錯誤",
         "blocked": "遭到阻擋",
+        "takedown_notified": "取消監控",
     }
-    return mapping.get(status, status) if status else ""
+    label = mapping.get(status, status) if status else ""
+    color = "#333"
+    if status == "suspected_violation": color = "#d93025"
+    elif status == "normal": color = "#166534"
+    elif status == "takedown_notified": color = "#b45309"
+    elif status in ("error", "blocked"): color = "#d93025"
+    return Markup(f'<span style="color: {color}; font-weight: 600;">{label}</span>')
+
+def format_source_label(source: str) -> str:
+    from markupsafe import Markup
+    if not source:
+        return "-"
+    source = source.lower()
+    mapping = {
+        "feebee": "飛比",
+        "findprice": "比價王",
+        "findprice_shopee": "比價王(蝦皮)",
+        "serpapi": "Google搜尋",
+        "serper": "Google搜尋",
+        "brave": "Brave搜尋",
+        "manual": "手動新增",
+        "direct_html": "網頁爬取",
+        "crawler": "自動爬蟲",
+        "mcp": "AI 代理",
+        "shopee": "蝦皮搜尋",
+        "biggo": "BigGo",
+        "lbj": "歷史價格",
+        "fallback": "備援系統"
+    }
+    name = mapping.get(source, source)
+    
+    color = "#657184" # default gray
+    if source == "feebee":
+        color = "#166534" # green
+    elif source in ("biggo", "lbj"):
+        color = "#0369a1" # dark blue
+    elif source == "fallback":
+        color = "#b45309" # orange
+    elif "findprice" in source:
+        color = "#b45309" # orange/yellow
+    elif source in ("serpapi", "serper", "brave"):
+        color = "#1a73e8" # blue
+    elif source == "manual":
+        color = "#657184" # gray
+    elif source in ("direct_html", "crawler", "shopee"):
+        color = "#6b21a8" # purple
+    elif source == "mcp":
+        color = "#d93025" # red
+        
+    return Markup(f'<span style="color: {color}; font-weight: 600;">{name}</span>')
+
+def canonical_url(url: str) -> str:
+    """Rewrite URLs to canonical forms to avoid browser or redirect blocks."""
+    if not url:
+        return ""
+    # Rewrite Shopee SEO URL to canonical /product/shop_id/item_id
+    # e.g., https://shopee.tw/xxx-i.1146071435.28055610078 -> https://shopee.tw/product/1146071435/28055610078
+    if "shopee.tw" in url:
+        import re
+        m = re.search(r'-i\.(\d+)\.(\d+)', url)
+        if m:
+            return f"https://shopee.tw/product/{m.group(1)}/{m.group(2)}"
+    return url
 
 def create_app(project_root: Path | None = None) -> FastAPI:
     root = project_root or Path(__file__).resolve().parents[2]
@@ -66,6 +130,8 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     templates.env.filters["fromjson"] = json.loads
     templates.env.filters["format_tz"] = format_tz
     templates.env.filters["status_label"] = status_label
+    templates.env.filters["format_source"] = format_source_label
+    templates.env.filters["canonical_url"] = canonical_url
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -103,12 +169,17 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     async def dashboard(request: Request):
         stats = db.summary_stats()
         budget = BudgetTracker(db).usage_summary()
+        # Exclude takedown_notified from dashboard lists
+        all_violations = db.get_snapshots(violation_only=True, limit=50)
+        violations = [s for s in all_violations if s.candidate_status != "takedown_notified"][:8]
+        all_recent = db.get_snapshots(limit=50)
+        recent = [s for s in all_recent if s.candidate_status != "takedown_notified"][:12]
         return _render(
             request, "dashboard.html", active="dashboard",
             summary=stats,
             budget=budget,
-            violations=db.get_snapshots(violation_only=True, limit=8),
-            recent=db.get_snapshots(limit=12),
+            violations=violations,
+            recent=recent,
         )
 
     # -- Products -----------------------------------------------------------
@@ -267,20 +338,94 @@ def create_app(project_root: Path | None = None) -> FastAPI:
         return RedirectResponse(url="/candidates", status_code=303)
 
     @app.post("/candidates/{candidate_id}/disable")
-    async def disable_candidate(candidate_id: int):
+    async def disable_candidate(candidate_id: int, request: Request):
         db.disable_candidate(candidate_id)
-        return RedirectResponse(url="/candidates", status_code=303)
+        referer = request.headers.get("referer") or "/candidates"
+        return RedirectResponse(url=referer, status_code=303)
+
+    @app.post("/candidates/{candidate_id}/restore")
+    async def restore_candidate(candidate_id: int, request: Request):
+        db.update_candidate_status(candidate_id, "normal")
+        referer = request.headers.get("referer") or "/candidates"
+        return RedirectResponse(url=referer, status_code=303)
 
     @app.post("/candidates/{candidate_id}/recheck")
-    async def recheck_candidate(candidate_id: int):
+    async def recheck_candidate(candidate_id: int, request: Request):
+        from src.config import load_config, load_env_file
+        load_env_file(root / ".env")
+        fresh_config = load_config(root / "config.yaml")
+
         from src.services.daily_monitor import DailyMonitorService
-        service = DailyMonitorService(db, config, root)
+        service = DailyMonitorService(db, fresh_config, root)
+        
+        referer = request.headers.get("referer") or "/candidates"
+        if "#" in referer:
+            referer = referer.split("#")[0]
+            
+        import urllib.parse
         try:
             service.check_single_candidate(candidate_id)
         except Exception as exc:
             LOGGER.warning("Recheck failed: %s", exc)
+            err_msg = urllib.parse.quote(f"重查失敗：{exc}")
+            if "?" in referer:
+                return RedirectResponse(url=f"{referer}&error={err_msg}#row-{candidate_id}", status_code=303)
+            return RedirectResponse(url=f"{referer}?error={err_msg}#row-{candidate_id}", status_code=303)
             
-        return RedirectResponse(url="/candidates", status_code=303)
+        success_msg = urllib.parse.quote("重查完畢")
+        if "?" in referer:
+            # strip existing message if any?
+            import re
+            referer = re.sub(r'([?&])message=[^&]*&?', r'\1', referer)
+            referer = re.sub(r'([?&])error=[^&]*&?', r'\1', referer)
+            if referer.endswith('?') or referer.endswith('&'):
+                referer = referer[:-1]
+            sep = "&" if "?" in referer else "?"
+            return RedirectResponse(url=f"{referer}{sep}message={success_msg}#row-{candidate_id}", status_code=303)
+            
+        return RedirectResponse(url=f"{referer}?message={success_msg}#row-{candidate_id}", status_code=303)
+
+    @app.post("/candidates/batch_recheck")
+    async def batch_recheck_candidates(request: Request):
+        form_data = await request.form()
+        candidate_ids = form_data.getlist("candidate_ids")
+        if not candidate_ids:
+            return RedirectResponse(url="/candidates?error=未選擇任何項目", status_code=303)
+            
+        from src.config import load_config, load_env_file
+        load_env_file(root / ".env")
+        fresh_config = load_config(root / "config.yaml")
+
+        from src.services.daily_monitor import DailyMonitorService
+        service = DailyMonitorService(db, fresh_config, root)
+        
+        success_count = 0
+        for cid_str in candidate_ids:
+            try:
+                service.check_single_candidate(int(cid_str))
+                success_count += 1
+            except Exception as exc:
+                LOGGER.warning("Batch recheck failed for candidate %s: %s", cid_str, exc)
+                
+        import urllib.parse
+        success_msg = urllib.parse.quote(f"已完成 {success_count} 筆批次重查")
+        return RedirectResponse(url=f"/candidates?message={success_msg}", status_code=303)
+
+    @app.post("/candidates/{candidate_id}/takedown")
+    async def mark_takedown_notified(candidate_id: int, request: Request):
+        """Mark a candidate as 'takedown notified'."""
+        db.update_candidate_status(candidate_id, "takedown_notified")
+        referer = request.headers.get("referer") or "/monitor/results"
+        if "#" in referer: referer = referer.split("#")[0]
+        return RedirectResponse(url=f"{referer}#row-{candidate_id}", status_code=303)
+
+    @app.post("/candidates/{candidate_id}/restore_violation")
+    async def restore_violation(candidate_id: int, request: Request):
+        """Restore a candidate to 'suspected_violation' from 'takedown_notified'."""
+        db.update_candidate_status(candidate_id, "normal")
+        referer = request.headers.get("referer") or "/monitor/results"
+        if "#" in referer: referer = referer.split("#")[0]
+        return RedirectResponse(url=f"{referer}#row-{candidate_id}", status_code=303)
 
     # -- Global Exclusions --------------------------------------------------
     @app.get("/exclusions", response_class=HTMLResponse)
@@ -320,7 +465,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             request, "results.html", active="results",
             snapshots=snapshots,
             filter_status=status or "",
-            title="疑似破價" if violation_only else "監測結果",
+            title="疑似破價" if violation_only else "每日掃描",
         )
 
     @app.get("/monitor/violations", response_class=HTMLResponse)
@@ -355,9 +500,13 @@ def create_app(project_root: Path | None = None) -> FastAPI:
 
         def _run():
             try:
+                from src.config import load_config, load_env_file
+                load_env_file(root / ".env")
+                fresh_config = load_config(root / "config.yaml")
+                
                 from src.services.daily_monitor import DailyMonitorService
                 from src.services.report_service import ReportService
-                service = DailyMonitorService(db, config, root)
+                service = DailyMonitorService(db, fresh_config, root)
                 result = service.run(progress_callback=_progress)
                 ReportService(db, root).export_daily_report()
                 ReportService(db, root).export_violations_report()
@@ -390,8 +539,12 @@ def create_app(project_root: Path | None = None) -> FastAPI:
 
         def _run():
             try:
+                from src.config import load_config, load_env_file
+                load_env_file(root / ".env")
+                fresh_config = load_config(root / "config.yaml")
+
                 from src.services.discovery_search import DiscoverySearchService
-                service = DiscoverySearchService(db, config, root)
+                service = DiscoverySearchService(db, fresh_config, root)
 
                 # Get products to show total count
                 products = db.list_products(active_only=True)
@@ -448,6 +601,59 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             budget=budget,
             logs=logs,
         )
+
+    # -- Multi-Source Dashboard Pages ---------------------------------------
+
+    @app.get("/observations", response_class=HTMLResponse)
+    async def observations_page(request: Request, product_id: int | None = None):
+        observations = db.get_observations(product_id=product_id, limit=300)
+        products = db.list_products(active_only=False)
+        return _render(
+            request, "observations.html", active="observations",
+            observations=observations,
+            products=products,
+            filter_product_id=product_id,
+        )
+
+    @app.get("/source-health", response_class=HTMLResponse)
+    async def source_health_page(request: Request):
+        health_stats = db.get_source_health()
+        return _render(
+            request, "source_health.html", active="source-health",
+            health_stats=health_stats,
+        )
+
+    @app.get("/manual-review", response_class=HTMLResponse)
+    async def manual_review_page(request: Request):
+        # We need to find candidates that need review.
+        # This includes blocked, captcha_required, or final_status=needs_review
+        # We can approximate this by querying snapshots where final_status=needs_review
+        snapshots = db.get_snapshots(limit=300)
+        review_items = [s for s in snapshots if s.final_status == "needs_review" or s.candidate_status in ("blocked", "captcha_required")]
+        return _render(
+            request, "manual_review.html", active="manual-review",
+            review_items=review_items,
+        )
+
+    @app.post("/manual-review/{candidate_id}/price")
+    async def manual_review_submit(
+        candidate_id: int,
+        price: float = Form(...),
+        product_id: int = Form(...),
+    ):
+        """Submit a manual price observation for a candidate."""
+        db.insert_observation(
+            product_id=product_id,
+            candidate_id=candidate_id,
+            platform="manual",
+            source="manual",
+            price=price,
+            match_score=100,
+            confidence=1.0,
+            status="success",
+            error_message="Manual input",
+        )
+        return RedirectResponse(url="/manual-review?message=已新增人工觀測價格", status_code=303)
 
     # -- Downloads ----------------------------------------------------------
 

@@ -88,10 +88,20 @@ class TestPlaywrightFallbackBlocked:
 
     def test_blocked_page_detection(self):
         """Verify _is_blocked detects Shopee blocking patterns."""
-        assert ShopeePlaywrightFallbackProvider._is_blocked("蝦皮購物", "選擇語言 繁體中文")
+        # Note: '選擇語言' is now handled by is_shopee_language_page, not _is_blocked
         assert ShopeePlaywrightFallbackProvider._is_blocked("蝦皮購物", "頁面無法顯示 發生錯誤")
         assert ShopeePlaywrightFallbackProvider._is_blocked("蝦皮", "請登入並再試一次")
         assert ShopeePlaywrightFallbackProvider._is_blocked("Verify", "captcha please verify")
+
+    def test_language_page_detected_separately(self):
+        """Language selection is now detected by is_shopee_language_page."""
+        from src.parsers.shopee_playwright_fallback import is_shopee_language_page
+
+        class _FakePage:
+            def title(self): return "蝦皮購物"
+            def inner_text(self, sel): return "選擇語言 繁體中文" if sel == "body" else ""
+
+        assert is_shopee_language_page(_FakePage())
 
     def test_normal_page_not_blocked(self):
         """Normal product page title should not be detected as blocked."""

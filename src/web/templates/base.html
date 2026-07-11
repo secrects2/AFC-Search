@@ -28,11 +28,19 @@
   <nav class="nav">
     <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/">儀表板</a>
     <a class="{{ 'active' if active == 'products' else '' }}" href="/products">商品<span class="desktop-only">清單</span></a>
-    <a class="{{ 'active' if active == 'candidates' else '' }}" href="/candidates">待審<span class="desktop-only">商品</span></a>
-    <a class="{{ 'active' if active == 'exclusions' else '' }}" href="/exclusions">挑除<span class="desktop-only">清單</span></a>
-    <a class="{{ 'active' if active == 'results' else '' }}" href="/monitor/results">監測<span class="desktop-only">結果</span></a>
+    <a class="{{ 'active' if active == 'candidates' else '' }}" href="/candidates">監控<span class="desktop-only">名單</span></a>
+    <a class="{{ 'active' if active == 'exclusions' else '' }}" href="/exclusions">商品關鍵字<span class="desktop-only">排除</span></a>
+    <a class="{{ 'active' if active == 'results' else '' }}" href="/monitor/results">每日<span class="desktop-only">掃描</span></a>
     <a class="{{ 'active' if active == 'violations' else '' }}" href="/monitor/violations">疑似<span class="desktop-only">破價</span></a>
-    <a class="{{ 'active' if active == 'api-usage' else '' }}" href="/api-usage">API<span class="desktop-only"> 用量</span></a>
+    <details style="position:relative; margin-left: auto; align-self: center;">
+      <summary style="padding:8px 12px; color:var(--muted); cursor:pointer; list-style:none; font-size:13px; border-radius:4px; border:1px solid transparent;" onmouseover="this.style.background='#f0f2f5'" onmouseout="this.style.background='transparent'">進階選項 ▾</summary>
+      <div style="position:absolute; right:0; top:100%; margin-top:4px; background:var(--panel); border:1px solid var(--line); box-shadow:0 4px 12px rgba(0,0,0,0.1); border-radius:6px; display:flex; flex-direction:column; min-width:150px; z-index:100; overflow:hidden;">
+        <a class="{{ 'active' if active == 'observations' else '' }}" href="/observations" style="border:none; padding:10px 16px; font-size:14px; width:100%;">多來源觀測</a>
+        <a class="{{ 'active' if active == 'source-health' else '' }}" href="/source-health" style="border:none; padding:10px 16px; font-size:14px; width:100%;">來源健康</a>
+        <a class="{{ 'active' if active == 'manual-review' else '' }}" href="/manual-review" style="border:none; padding:10px 16px; font-size:14px; width:100%;">人工審核</a>
+        <a class="{{ 'active' if active == 'api-usage' else '' }}" href="/api-usage" style="border:none; padding:10px 16px; font-size:14px; width:100%;">API 用量</a>
+      </div>
+    </details>
   </nav>
   <main>
     {% if run_status.warning %}

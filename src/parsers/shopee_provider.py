@@ -117,7 +117,13 @@ def build_shopee_provider_chain() -> list[ShopeePriceProvider]:
         providers.append(ShopeeHtmlFallbackProvider(timeout=timeout))
 
     if mode in ("playwright", "chain"):
-        providers.append(ShopeePlaywrightFallbackProvider(timeout=timeout))
+        profile_dir = os.environ.get("SHOPEE_PROFILE_DIR", "data/browser_profiles/shopee")
+        headless = os.environ.get("SHOPEE_HEADLESS", "false").lower() in ("true", "1", "yes")
+        providers.append(ShopeePlaywrightFallbackProvider(
+            timeout=timeout,
+            profile_dir=profile_dir,
+            headless=headless,
+        ))
 
     if not providers:
         LOGGER.warning("No Shopee providers configured; Shopee URLs will return price_unknown")

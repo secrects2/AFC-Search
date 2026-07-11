@@ -101,6 +101,7 @@ if (-not $domain) {
 
 # Create config file
 $cfConfigDir = Join-Path $env:USERPROFILE ".cloudflared"
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not (Test-Path $cfConfigDir)) {
     New-Item -ItemType Directory -Path $cfConfigDir -Force | Out-Null
 }
@@ -111,17 +112,19 @@ credentials-file: $cfConfigDir\$tunnelId.json
 
 ingress:
   - hostname: $domain
-    service: http://127.0.0.1:8001
+    service: http://127.0.0.1:8002
   - service: http_status:404
 "@
 
 $configPath = Join-Path $cfConfigDir "config.yml"
 $configContent | Out-File -FilePath $configPath -Encoding UTF8
+$localConfigPath = Join-Path $ProjectRoot "cloudflared.local.yml"
+$configContent | Out-File -FilePath $localConfigPath -Encoding UTF8
 Write-Host ""
 Write-Host "  設定檔已寫入：$configPath" -ForegroundColor Gray
+Write-Host "  專案 Tunnel 設定已寫入：$localConfigPath" -ForegroundColor Gray
 
 # Create a bat file to run the tunnel
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $tunnelBat = Join-Path $ProjectRoot "run_tunnel.bat"
 @"
 @echo off
@@ -129,7 +132,16 @@ REM AFC Cloudflare Tunnel
 cd /d "%~dp0"
 if not exist "logs" mkdir logs
 echo [%date% %time%] Tunnel 啟動 >> logs\tunnel.log
-cloudflared tunnel run $tunnelName >> logs\tunnel.log 2>&1
+set "CLOUDFLARED=C:\Program Files (x86)\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED%" set "CLOUDFLARED=C:\Program Files\cloudflared\cloudflared.exe"
+if not exist "%CLOUDFLARED%" (
+    echo [%date% %time%] ERROR: cloudflared.exe not found >> logs\tunnel.log
+    exit /b 1
+)
+"%CLOUDFLARED%" tunnel --config "%~dp0cloudflared.local.yml" run $tunnelName >> logs\tunnel.log 2>&1
+set "EXIT_CODE=%ERRORLEVEL%"
+echo [%date% %time%] Tunnel 停止，exit code %EXIT_CODE% >> logs\tunnel.log
+exit /b %EXIT_CODE%
 "@ | Out-File -FilePath $tunnelBat -Encoding ASCII
 
 # Register as Windows scheduled task (auto-start on login)
@@ -150,7 +162,7 @@ $tunnelSettings = New-ScheduledTaskSettingsSet `
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType Interactive `
-    -RunLevel LeastPrivilege
+    -RunLevel Limited
 
 Register-ScheduledTask `
     -TaskName "AFC Price Monitor - Cloudflare Tunnel" `
@@ -160,6 +172,11 @@ Register-ScheduledTask `
     -Principal $principal `
     -Description "AFC Cloudflare Tunnel — 讓同事連線到 Dashboard" `
     -Force | Out-Null
+
+$recoveryScript = Join-Path $ProjectRoot "scripts\setup_cloudflare_autorecovery.ps1"
+if (Test-Path $recoveryScript) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $recoveryScript
+}
 
 Write-Host ""
 Write-Host "=======================================" -ForegroundColor Cyan

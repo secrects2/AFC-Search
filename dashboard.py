@@ -10,8 +10,8 @@ from src.web.api import create_app
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AFC 價格監控本機網站")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8002)
     return parser.parse_args()
 
 

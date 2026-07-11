@@ -324,6 +324,44 @@ SHOPEE_MAX_RETRIES=1
 - `playwright`：僅使用 Playwright
 - `chain`（預設）：依序嘗試全部
 
+### Shopee 語言設定（Persistent Browser Profile）
+
+Shopee 首次開啟時會顯示「選擇語言」頁面，導致自動化抓取失敗。系統使用 **persistent browser profile** 解決此問題：Playwright 會重用已保存的瀏覽器資料（cookie、語言偏好），避免每次都進入語言選擇頁。
+
+**首次使用前，請執行一次：**
+
+```powershell
+python tools/setup_shopee_profile.py
+```
+
+這會開啟一個 Chromium 瀏覽器視窗並導航到 shopee.tw。請手動：
+
+1. 選擇語言（繁體中文）
+2. 選擇地區（如有提示）
+3. 等待首頁完全載入
+
+完成後回到終端按 Enter，瀏覽器會關閉並保存 profile 到 `data/browser_profiles/shopee/`。
+
+之後每日監測會自動重用此 profile，不再跳語言選擇頁。
+
+**若 Shopee 仍然跳語言選擇頁：**
+- 報表會顯示 `parse_status = language_required`
+- 請重新執行 `python tools/setup_shopee_profile.py`
+
+**相關設定（`config.yaml`）：**
+
+```yaml
+shopee_profile_dir: data/browser_profiles/shopee
+shopee_headless: false
+```
+
+**或在 `.env` 中覆蓋：**
+
+```env
+SHOPEE_PROFILE_DIR=data/browser_profiles/shopee
+SHOPEE_HEADLESS=false
+```
+
 第三方 API 請求格式為 POST JSON：
 
 ```json
@@ -355,7 +393,8 @@ print(f'Price: {result.price}, Status: {result.parse_status}')
 |------|------|
 | `ok` | 成功取得價格 |
 | `price_not_found` | HTML / DOM 中找不到價格（對應 `price_unknown`） |
-| `page_blocked` | Shopee 阻擋（403 / captcha / 語言頁）（對應 `blocked`） |
+| `page_blocked` | Shopee 阻擋（403 / captcha / 登入牆）（對應 `blocked`） |
+| `language_required` | Shopee 顯示語言選擇頁，請執行 `tools/setup_shopee_profile.py` |
 | `search_failed` | provider 錯誤（timeout / 網路問題） |
 
 ## 合規注意事項

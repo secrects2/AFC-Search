@@ -31,6 +31,8 @@ PLATFORM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"ruten\.com\.tw", re.IGNORECASE), "ruten"),
     (re.compile(r"rakuten\.com\.tw", re.IGNORECASE), "rakuten"),
     (re.compile(r"coupang\.onelink\.me|coupang\.com", re.IGNORECASE), "coupang"),
+    (re.compile(r"biggo\.com\.tw", re.IGNORECASE), "biggo"),
+    (re.compile(r"lbj\.tw", re.IGNORECASE), "lbj"),
 ]
 
 # URL patterns that indicate a NON-product page (category, search, collection, etc.)
@@ -88,6 +90,8 @@ def _build_site_restriction(platforms: list[str]) -> str:
         "pchome": "24h.pchome.com.tw",
         "ruten": "ruten.com.tw",
         "rakuten": "rakuten.com.tw",
+        "biggo": "biggo.com.tw",
+        "lbj": "lbj.tw",
     }
     sites = [f"site:{site_map[p]}" for p in platforms if p in site_map]
     if not sites:

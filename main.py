@@ -29,6 +29,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--manual-links", default="", help="手動連結 CSV 路徑")
     parser.add_argument("--config", default="config.yaml", help="設定檔路徑")
     parser.add_argument("--scheduled", action="store_true", help="Windows 工作排程器模式")
+    parser.add_argument(
+        "--disable-dead-find",
+        action="store_true",
+        help="清理資料庫，將過期的 FindPrice 網址標記為 source_dead",
+    )
     return parser.parse_args(argv)
 
 
@@ -119,6 +124,15 @@ def run(argv: list[str] | None = None) -> int:
     except Exception as exc:
         LOGGER.exception("重大錯誤：商品主檔讀取失敗：%s", exc)
         return 2
+
+    # Check for disable-dead-find
+    if args.disable_dead_find:
+        LOGGER.info("執行過期 FindPrice 網址清理...")
+        db_path = resolve_project_path(project_root, config.database_path)
+        db = Database(db_path)
+        count = db.disable_obsolete_findprice_urls()
+        LOGGER.info("清理完成，共停用 %d 筆過期網址。", count)
+        return 0
 
     manual_path = (
         resolve_project_path(project_root, args.manual_links)

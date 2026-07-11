@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="header-row">
+  <h2>人工審核</h2>
+  <div style="font-size: 14px; color: #666;">
+    顯示需要人工介入審核的商品（如機器人判定信心不足，或是頁面遭到阻擋）。
+  </div>
+</div>
+
+{% if request.query_params.message %}
+  <div class="notice">{{ request.query_params.message }}</div>
+{% endif %}
+
+<div class="card" style="overflow-x:auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>時間</th>
+        <th>商品名稱</th>
+        <th>平台</th>
+        <th>標題</th>
+        <th>狀態</th>
+        <th>最終價格</th>
+        <th>自動決策原因</th>
+        <th>人工審核</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in review_items %}
+      <tr>
+        <td style="font-size:12px;color:#666;">{{ item.checked_at[:16] }}</td>
+        <td>{{ item.product_name }}</td>
+        <td><span class="badge" style="background:#e0e0e0;color:#333;">{{ item.platform }}</span></td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          {% if item.url %}
+            <a href="{{ item.url | canonical_url }}" target="_blank">{{ item.title or '(無)' }}</a>
+          {% else %}
+            {{ item.title or '(無)' }}
+          {% endif %}
+        </td>
+        <td>
+          {% if item.candidate_status == 'blocked' or item.candidate_status == 'captcha_required' %}
+            <span class="badge badge-error">遭阻擋</span>
+          {% elif item.final_status == 'needs_review' %}
+            <span class="badge badge-warning">需審核</span>
+          {% else %}
+            <span class="badge">{{ item.final_status or item.candidate_status }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if item.final_price %}
+            <strong>${{ item.final_price|int }}</strong>
+          {% elif item.price %}
+            ${{ item.price|int }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
+        <td style="font-size:12px;color:#666;max-width:200px;">
+          {{ item.decision_reason }}
+        </td>
+        <td>
+          <form method="POST" action="/manual-review/{{ item.candidate_id }}/price" style="display:flex;gap:4px;align-items:center;">
+            <input type="hidden" name="product_id" value="{{ item.product_id }}">
+            <input type="number" name="price" placeholder="輸入價格" required style="width:80px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+            <button type="submit" class="btn btn-primary" style="padding:4px 8px;font-size:12px;">送出</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8" style="text-align:center;padding:32px;color:#666;">無需要審核的商品</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

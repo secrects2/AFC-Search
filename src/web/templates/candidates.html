@@ -2,7 +2,7 @@
 {% block content %}
 <section class="panel">
   <div class="section-head">
-    <h2>候選連結 ({{ candidates|length }} 筆)</h2>
+    <h2>監控名單 ({{ candidates|length }} 筆)</h2>
   </div>
 
   <details style="margin-bottom:16px">
@@ -21,16 +21,32 @@
     </form>
   </details>
 
+  <div style="margin-bottom: 16px;">
+    <strong>過濾狀態：</strong>
+    <a href="/candidates" style="margin-right:8px; font-weight: {{ 'bold' if not request.query_params.get('status') else 'normal' }}">全部有效</a>
+    <a href="/candidates?status=excluded" style="margin-right:8px; font-weight: {{ 'bold' if request.query_params.get('status') == 'excluded' else 'normal' }}">被排除 (Excluded)</a>
+    <a href="/candidates?status=suspected_violation" style="margin-right:8px; font-weight: {{ 'bold' if request.query_params.get('status') == 'suspected_violation' else 'normal' }}">疑似破價</a>
+  </div>
+  
+  <div style="margin-bottom: 16px;">
+    <button type="button" class="primary" onclick="submitBatchRecheck(this)">批次重查選取的項目</button>
+  </div>
+
   {% if request.query_params.get('error') %}
-    <div class="notice danger">{{ request.query_params.get('error') }}</div>
+    <div class="notice error">{{ request.query_params.get('error') }}</div>
+  {% endif %}
+  {% if request.query_params.get('message') %}
+    <div class="notice ok" style="background:#eaf7ee; color:#166534; border-color:#a3e0b5;">{{ request.query_params.get('message') }}</div>
   {% endif %}
 
   <table class="compact">
     <thead>
       <tr>
+        <th style="width: 30px;"><input type="checkbox" onclick="toggleAllCheckboxes(this)"></th>
         <th>商品</th>
         <th>平台</th>
         <th>標題</th>
+        <th>建議售價</th>
         <th>最新價格</th>
         <th>狀態</th>
         <th>來源</th>
@@ -40,27 +56,84 @@
     </thead>
     <tbody>
     {% for c in candidates %}
-      <tr class="{{ 'danger-row' if c.status == 'suspected_violation' else '' }}">
+      <tr id="row-{{ c.id }}" class="{{ 'danger-row' if c.status == 'suspected_violation' else ('warning-row' if c.status == 'takedown_notified' else '') }}">
+        <td><input type="checkbox" class="batch-check" value="{{ c.id }}"></td>
         <td>{{ c.product_name[:15] }}</td>
         <td>{{ c.platform }}</td>
-        <td><a href="{{ c.url }}" target="_blank" title="{{ c.url }}">{{ (c.title or c.url)[:30] }}</a></td>
-        <td>{{ c.last_price if c.last_price is not none else '-' }}</td>
+        <td><a href="{{ c.url | canonical_url }}" target="_blank" title="{{ c.url }}">{{ (c.title or c.url)[:30] }}</a></td>
+        <td>{{ c.suggested_price|int if c.suggested_price is not none else '-' }}</td>
+        <td>{{ c.last_price|int if c.last_price is not none else '-' }}</td>
         <td>{{ c.status|status_label }}</td>
-        <td>{{ c.source_found_by }}</td>
+        <td>{{ c.source_found_by | format_source | safe }}</td>
         <td>{{ c.last_checked_at|format_tz if c.last_checked_at else '-' }}</td>
         <td style="white-space:nowrap">
-          <form method="post" action="/candidates/{{ c.id }}/recheck" style="display:inline">
+          <form method="post" action="/candidates/{{ c.id }}/recheck" style="display:inline" onsubmit="var btn = this.querySelector('button'); btn.disabled = true; btn.innerText = '處理中...'; this.closest('tr').style.backgroundColor = '#fff3cd';">
             <button type="submit" class="small">重查</button>
           </form>
-          <form method="post" action="/candidates/{{ c.id }}/disable" style="display:inline">
-            <button type="submit" class="small danger">停用</button>
+          {% if c.status == 'suspected_violation' %}
+            <form method="post" action="/candidates/{{ c.id }}/takedown" style="display:inline"
+                  onsubmit="return confirm('確定取消監控？')">
+              <button type="submit" class="small" style="background:#e65100;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;" title="取消監控">❌</button>
+            </form>
+          {% elif c.status == 'takedown_notified' %}
+            <form method="post" action="/candidates/{{ c.id }}/restore_violation" style="display:inline"
+                  onsubmit="return confirm('確定恢復監控？')">
+              <button type="submit" class="small" style="background:#2e7d32;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;" title="恢復監控">✅</button>
+            </form>
+          {% endif %}
+          {% if c.status == 'excluded' %}
+          <form method="post" action="/candidates/{{ c.id }}/restore" style="display:inline">
+            <button type="submit" class="small" style="background:#2e7d32;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">恢復</button>
           </form>
+          {% else %}
+          <form method="post" action="/candidates/{{ c.id }}/disable" style="display:inline" onsubmit="return confirm('確定要將此網址排除，不再監控嗎？')">
+            <button type="submit" class="small danger">不再監控</button>
+          </form>
+          {% endif %}
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="8">尚無候選連結。請先執行「搜尋新連結」或手動新增。</td></tr>
+      <tr><td colspan="10">尚無候選連結。請先執行「搜尋新連結」或手動新增。</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </section>
+
+<script>
+function toggleAllCheckboxes(source) {
+  let checkboxes = document.querySelectorAll('.batch-check');
+  for(let i=0; i<checkboxes.length; i++) {
+    checkboxes[i].checked = source.checked;
+  }
+}
+
+function submitBatchRecheck(btn) {
+  let checked = document.querySelectorAll('.batch-check:checked');
+  if (checked.length === 0) {
+    alert('請先選擇要批次重查的項目');
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.innerText = '批次處理中...';
+  
+  let form = document.createElement('form');
+  form.method = 'post';
+  form.action = '/candidates/batch_recheck';
+  
+  checked.forEach(cb => {
+    let input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'candidate_ids';
+    input.value = cb.value;
+    form.appendChild(input);
+    
+    // 反亮正在重查的那一列
+    cb.closest('tr').style.backgroundColor = '#fff3cd';
+  });
+  
+  document.body.appendChild(form);
+  form.submit();
+}
+</script>
 {% endblock %}

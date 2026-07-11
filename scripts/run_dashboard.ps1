@@ -14,5 +14,5 @@ if (-not (Test-Path $PythonExe)) {
     exit 1
 }
 
-Write-Host "AFC 價格監控本機網站：http://127.0.0.1:8001" -ForegroundColor Green
-& $PythonExe dashboard.py --host 127.0.0.1 --port 8001
+Write-Host "AFC 價格監控本機網站：http://127.0.0.1:8002" -ForegroundColor Green
+& $PythonExe dashboard.py --host 127.0.0.1 --port 8002

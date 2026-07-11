@@ -1,0 +1,104 @@
+from pathlib import Path
+from src.database import Database
+from src.services.final_price import select_final_price
+
+from types import SimpleNamespace
+
+def test_select_final_price_single_direct():
+    """Test final price selection with single direct crawl result."""
+    obs = [SimpleNamespace(
+        source="direct_html",
+        price=120,
+        status="success",
+        match_score=100,
+        confidence=0.9,
+    )]
+    decision = select_final_price(1, obs, 120)
+    assert decision.final_price == 120
+    assert decision.final_status == "verified_price"
+    assert decision.final_price_source == "direct_html"
+
+def test_select_final_price_feebee_fallback():
+    """Test final price falls back to feebee when direct fails."""
+    obs = [
+        SimpleNamespace(
+            source="direct_html",
+            price=None,
+            status="blocked",
+            match_score=0,
+            confidence=0.0,
+        ),
+        SimpleNamespace(
+            source="feebee",
+            price=120,
+            status="success",
+            match_score=90,
+            confidence=0.8,
+        )
+    ]
+    decision = select_final_price(1, obs, 120)
+    assert decision.final_price == 120
+    assert decision.final_status == "likely_price"
+    assert decision.final_price_source == "feebee"
+
+def test_select_final_price_manual_override():
+    """Test manual review price takes precedence."""
+    obs = [
+        SimpleNamespace(
+            source="manual",
+            price=120,
+            status="success",
+            match_score=100,
+            confidence=1.0,
+        ),
+        SimpleNamespace(
+            source="direct_html",
+            price=150,
+            status="success",
+            match_score=100,
+            confidence=0.9,
+        )
+    ]
+    decision = select_final_price(1, obs, 120)
+    assert decision.final_price == 120
+    assert decision.final_status == "normal"
+    assert decision.final_price_source == "manual"
+
+def test_select_final_price_needs_review():
+    """Test low confidence feebee result triggers manual review."""
+    obs = [
+        SimpleNamespace(
+            source="direct_html",
+            price=None,
+            status="blocked",
+            match_score=0,
+            confidence=0.0,
+        ),
+        SimpleNamespace(
+            source="feebee",
+            price=110,
+            status="success",
+            match_score=50,
+            confidence=0.3, # low confidence
+        )
+    ]
+    decision = select_final_price(1, obs, 120)
+    assert decision.final_price == 110
+    assert decision.final_status == "needs_review"
+    assert decision.final_price_source == "feebee"
+
+def test_select_final_price_suspected_violation():
+    """Test violation detection."""
+    obs = [
+        SimpleNamespace(
+            source="direct_html",
+            price=80,
+            status="success",
+            match_score=100,
+            confidence=0.85, # high confidence, suspected or verified violation
+        )
+    ]
+    # Suggested price is 120, so 80 is a violation
+    decision = select_final_price(1, obs, 120)
+    assert decision.final_price == 80
+    assert decision.final_status == "verified_violation"

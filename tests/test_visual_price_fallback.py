@@ -18,7 +18,7 @@ def test_generic_parser_visual_fallback(mock_config, monkeypatch):
     parser = GenericParser(mock_config)
     
     # Mock network to return a dummy page with no price
-    monkeypatch.setattr(parser, "fetch_page", lambda url: "<html><body>No price here</body></html>")
+    monkeypatch.setattr(parser, "fetch_page", lambda url, platform="": "<html><body>No price here</body></html>")
     
     # Mock capture_screenshot
     def mock_capture(*args, **kwargs):
@@ -55,7 +55,7 @@ def test_generic_parser_visual_fallback(mock_config, monkeypatch):
 def test_generic_parser_visual_fallback_failure(mock_config, monkeypatch):
     parser = GenericParser(mock_config)
     
-    monkeypatch.setattr(parser, "fetch_page", lambda url: "<html><body>No price here</body></html>")
+    monkeypatch.setattr(parser, "fetch_page", lambda url, platform="": "<html><body>No price here</body></html>")
     
     def mock_capture(*args, **kwargs):
         return str(args[1]), "ok"

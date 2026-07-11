@@ -2,7 +2,7 @@
 {% block content %}
 <section>
   <div class="panel" style="margin-bottom: 24px;">
-    <h2>全域挑除清單 (Global Exclusion List)</h2>
+    <h2>商品關鍵字排除</h2>
     <p>在這裡新增的關鍵字（如「10粒/盒」、「分裝」），系統在搜尋新商品或進行每日監測時會自動將符合的標題排除，不再納入比價範圍。</p>
     
     <form method="post" action="/exclusions" class="form-row" style="margin-top: 16px;">
@@ -12,7 +12,7 @@
   </div>
 
   <div class="panel">
-    <h3>目前已挑除的關鍵字</h3>
+    <h3>目前已排除的關鍵字</h3>
     <table class="compact">
       <thead>
         <tr>
@@ -28,12 +28,12 @@
           <td>{{ ex.created_at }}</td>
           <td style="text-align: center;">
             <form method="post" action="/exclusions/{{ ex.id }}/delete" style="margin:0;">
-              <button class="danger" type="submit" onclick="return confirm('確定要刪除此挑除關鍵字嗎？');">刪除</button>
+              <button class="danger" type="submit" onclick="return confirm('確定要刪除此排除關鍵字嗎？');">刪除</button>
             </form>
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="3" style="text-align: center; padding: 24px;">尚無任何挑除關鍵字</td></tr>
+        <tr><td colspan="3" style="text-align: center; padding: 24px;">尚無任何排除關鍵字</td></tr>
       {% endfor %}
       </tbody>
     </table>

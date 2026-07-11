@@ -52,6 +52,7 @@ def _status_label(status: str) -> str:
         "blocked": "遭到阻擋",
         "active": "待監測",
         "excluded": "已排除",
+        "takedown_notified": "已通知下架",
     }
     return labels.get(status, status) if status else ""
 
