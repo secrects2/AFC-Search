@@ -9,6 +9,7 @@ This is the core daily monitoring loop. It:
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -55,6 +56,9 @@ class DailyMonitorService:
         self.fallback_provider = FallbackPriceProvider(
             {"request_timeout_seconds": config.request_timeout_seconds}, db
         )
+        # Keep the old attribute name available for integrations and tests
+        # while the monitor uses the multi-source fallback provider.
+        self.feebee_provider = self.fallback_provider
 
     def run(
         self,
@@ -233,7 +237,7 @@ class DailyMonitorService:
                 status="skipped",
                 error_message="BigGo is handled via fallback",
             )
-        elif "lbj.tw" in candidate.url.lower():
+        elif "lbj.tw" in candidate.url.lower() and "/rd.ashx" not in candidate.url.lower():
             skip_direct = True
             direct_status = "skipped"
             LOGGER.info("Skipping direct crawl for LBJ URL: %s", candidate.url[:50])
@@ -243,7 +247,7 @@ class DailyMonitorService:
                 platform="lbj",
                 source="direct_html",
                 url=candidate.url,
-                status="skipped",
+                status="skipped_direct_crawl",
                 error_message="LBJ is handled via fallback",
             )
         elif platform_lower == "shopee" and not self.config.shopee_direct_daily_crawl_enabled and not force_direct:
@@ -336,6 +340,39 @@ class DailyMonitorService:
             )
             self.health_tracker.record("direct_html", platform_lower, obs_status)
 
+        # Preserve the price shown on the LBJ comparison page as its own
+        # observation. Directly resolving the redirect remains preferred; if
+        # that source is blocked, this price can still be reviewed and compared.
+        lbj_price = candidate.last_price
+        if candidate.source_found_by == "lbj":
+            try:
+                preserved_price = json.loads(candidate.raw_data or "{}").get("lbj_price")
+            except (TypeError, ValueError):
+                preserved_price = None
+            if isinstance(preserved_price, (int, float)):
+                lbj_price = float(preserved_price)
+
+        if candidate.source_found_by == "lbj" and lbj_price is not None:
+            self.db.insert_observation(
+                product_id=candidate.product_id,
+                candidate_id=candidate.id,
+                platform=platform_lower,
+                source="lbj",
+                url=candidate.url,
+                title=candidate.title,
+                seller=candidate.seller,
+                price=lbj_price,
+                match_score=100,
+                confidence=0.75,
+                status="success",
+                raw_data={
+                    "source": "lbj_search",
+                    "price_is_from_discovery": True,
+                    "discovery_price": lbj_price,
+                },
+            )
+            self.health_tracker.record("lbj", platform_lower, "success")
+
         # -------------------------------------------------------------------
         # Source 2: Fallback Providers (Feebee, BigGo, LBJ)
         # -------------------------------------------------------------------
@@ -401,8 +438,8 @@ class DailyMonitorService:
             result.price_unknown += 1
             final_extraction.parse_status = "price_not_found"
         elif decision.final_status == "needs_review":
-            result.normal += 1  # count as normal but needs review
-            final_extraction.parse_status = "ok"
+            result.price_unknown += 1
+            final_extraction.parse_status = "price_not_found"
         elif decision.final_status in ("verified_price", "likely_price", "normal"):
             decision.final_status = "normal"
             result.normal += 1
@@ -417,6 +454,10 @@ class DailyMonitorService:
             db_status = 'takedown_notified'
         else:
             db_status = decision.final_status
+            if db_status == "needs_review":
+                # Keep the candidate eligible for the next scheduled retry;
+                # the snapshot's needs_review status sends it to manual review.
+                db_status = "price_unknown"
             if db_status == "price_unknown" and skip_direct and "FindPrice" in direct_status:
                 db_status = "source_dead"
 
@@ -438,6 +479,9 @@ class DailyMonitorService:
             raw_data={
                 "decision_reason": decision.decision_reason,
                 "all_prices": decision.all_prices,
+                "price_source": decision.final_price_source,
+                "final_confidence": decision.final_confidence,
+                "final_status": decision.final_status,
             },
         )
         

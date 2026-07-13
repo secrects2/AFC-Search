@@ -7,6 +7,7 @@ from typing import Any
 from src.database import Database, ProductRow, CandidateRow
 from src.loader import Product
 from src.matcher import match_score
+from src.search.base import SearchResult
 from src.search.search_api import ChainSearchProvider
 from src.search.feebee_search import FeebeeSearchProvider
 from src.search.biggo_api import BigGoSearchProvider
@@ -30,6 +31,10 @@ class FallbackPriceProvider:
                 LbjSearchProvider(),
             ]
         )
+        # A daily run may have many candidates for one product. Reuse the
+        # comparison-page results within that run instead of querying the same
+        # LBJ/aggregator page once per candidate.
+        self._result_cache: dict[str, list[SearchResult]] = {}
 
     def observe(self, product: ProductRow, candidate: CandidateRow) -> dict[str, Any] | None:
         """
@@ -62,31 +67,37 @@ class FallbackPriceProvider:
             raw_suggested_price=str(product.suggested_price or ""),
         )
 
-        from src.services.source_health import SourceHealthTracker
-        health = SourceHealthTracker(self._db)
-        
-        active_providers = []
-        if not health.should_skip("feebee", expected_platform or ""):
-            active_providers.append(FeebeeSearchProvider())
+        cache_key = keyword.casefold().strip()
+        if cache_key in self._result_cache:
+            results = self._result_cache[cache_key]
+            LOGGER.info("使用本次監控的 fallback 快取：%s (%d 筆)", keyword, len(results))
         else:
-            LOGGER.info("Feebee is on cooldown, skipping fallback.")
-            
-        if not health.should_skip("biggo", expected_platform or ""):
-            active_providers.append(BigGoSearchProvider())
-        else:
-            LOGGER.info("BigGo is on cooldown, skipping fallback.")
-            
-        if not health.should_skip("lbj", expected_platform or ""):
-            active_providers.append(LbjSearchProvider())
-        else:
-            LOGGER.info("LBJ is on cooldown, skipping fallback.")
+            from src.services.source_health import SourceHealthTracker
+            health = SourceHealthTracker(self._db)
 
-        if not active_providers:
-            LOGGER.warning("All fallback providers are blocked/cooldown for %s", expected_platform)
-            return None
+            active_providers = []
+            if not health.should_skip("feebee", expected_platform or ""):
+                active_providers.append(FeebeeSearchProvider())
+            else:
+                LOGGER.info("Feebee is on cooldown, skipping fallback.")
 
-        search_provider = ChainSearchProvider(providers=active_providers)
-        results = search_provider.search(temp_product, max_results=30)
+            if not health.should_skip("biggo", expected_platform or ""):
+                active_providers.append(BigGoSearchProvider())
+            else:
+                LOGGER.info("BigGo is on cooldown, skipping fallback.")
+
+            if not health.should_skip("lbj", expected_platform or ""):
+                active_providers.append(LbjSearchProvider())
+            else:
+                LOGGER.info("LBJ is on cooldown, skipping fallback.")
+
+            if not active_providers:
+                LOGGER.warning("All fallback providers are blocked/cooldown for %s", expected_platform)
+                return None
+
+            search_provider = ChainSearchProvider(providers=active_providers)
+            results = search_provider.search(temp_product, max_results=30)
+            self._result_cache[cache_key] = results
         
         if not results:
             return None
@@ -157,5 +168,9 @@ class FallbackPriceProvider:
             "error_message": "",
             "raw_data": {
                 "evidence_text": str(best_listing.found_price),
+                "fallback_provider": best_listing.source,
+                "search_keyword": keyword,
+                "matched_platform": best_listing.platform,
+                "direct_verification_required": expected_platform in {"pchome", "coupang"},
             }
         }

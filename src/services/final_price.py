@@ -85,6 +85,8 @@ def select_final_price(
         "direct_json": 80,
         "direct_html": 70,
         "feebee": 60,
+        "biggo": 55,
+        "lbj": 65,
         "visual_ocr": 40,
     }
 
@@ -139,6 +141,30 @@ def select_final_price(
             final_status = "suspected_violation"
             if "direct" in best_obs.source and best_obs.match_score >= 85:
                 final_status = "verified_violation"
+
+    # PChome frequently blocks direct requests. A comparison-site price can be
+    # stale or represent a different price tier, so it must not be used as an
+    # automatic normal/violation decision when direct verification failed.
+    protected_platform_direct_blocked = (
+        getattr(best_obs, "platform", "").lower() in {"pchome", "coupang"}
+        and best_obs.source in {"feebee", "biggo", "lbj", "fallback"}
+        and any(
+            obs.source == "direct_html"
+            and obs.status in {
+                "blocked",
+                "captcha_required",
+                "traffic_verify",
+                "rate_limited",
+                "source_dead",
+                "error",
+            }
+            for obs in observations
+        )
+    )
+    if protected_platform_direct_blocked:
+        final_status = "needs_review"
+        platform_name = getattr(best_obs, "platform", "").capitalize()
+        reason = f"{platform_name} 直連未驗證，備援平台價格僅供參考，待人工確認"
 
     return FinalPriceDecision(
         final_price=best_obs.price,

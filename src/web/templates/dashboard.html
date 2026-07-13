@@ -21,6 +21,10 @@
     <span>未抓到價格</span>
     <strong>{{ summary.price_unknown }}</strong>
   </div>
+  <div class="stat warning">
+    <span>待人工確認</span>
+    <strong>{{ summary.needs_review }}</strong>
+  </div>
   <div class="stat">
     <span>追蹤連結數</span>
     <strong>{{ summary.active_candidates }}</strong>
@@ -66,7 +70,7 @@
           <td class="danger">{{ s.price_diff|int if s.price_diff is not none else '-' }}</td>
           <td>
             {% set raw = s.raw_data|fromjson if s.raw_data else {} %}
-            {% set p_src = raw.get('price_source', 'dom') %}
+            {% set p_src = s.final_price_source or raw.get('price_source', 'dom') %}
             {% if p_src == 'visual_ocr' %}
               <span class="badge" style="background:#e8f0fe;color:#1a73e8;border:1px solid #1a73e8;">👁️ 視覺辨識</span>
             {% elif p_src == 'html_text' %}
@@ -95,7 +99,7 @@
           <td>{{ s.product_name[:20] }}</td>
           <td>{{ s.platform }}</td>
           <td>{{ s.price|int if s.price is not none else '-' }}</td>
-          <td>{{ s.candidate_status|status_label }}</td>
+          <td>{{ s|snapshot_status|status_label }}</td>
         </tr>
       {% else %}
         <tr><td colspan="4">尚無監測結果，請先執行每日監測</td></tr>

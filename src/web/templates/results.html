@@ -8,6 +8,7 @@
     <a class="button {{ 'primary' if not filter_status else '' }}" href="/monitor/results">全部</a>
     <a class="button {{ 'primary' if filter_status == 'suspected_violation' else '' }}" href="/monitor/results?status=suspected_violation">監控中</a>
     <a class="button {{ 'primary' if filter_status == 'takedown_notified' else '' }}" href="/monitor/results?status=takedown_notified">取消監控</a>
+    <a class="button {{ 'primary' if filter_status == 'needs_review' else '' }}" href="/monitor/results?status=needs_review">待人工確認</a>
     <a class="button {{ 'primary' if filter_status == 'price_unknown' else '' }}" href="/monitor/results?status=price_unknown">未抓到價格</a>
     <a class="button {{ 'primary' if filter_status == 'error' else '' }}" href="/monitor/results?status=error">錯誤</a>
     <a class="button {{ 'primary' if filter_status == 'normal' else '' }}" href="/monitor/results?status=normal">正常</a>
@@ -37,7 +38,7 @@
         <td>{{ s.price|int if s.price is not none else '-' }}</td>
         <td>
           {% set raw = s.raw_data|fromjson if s.raw_data else {} %}
-          {% set p_src = raw.get('price_source', 'dom') %}
+          {% set p_src = s.final_price_source or raw.get('price_source', 'dom') %}
           {% if p_src == 'visual_ocr' %}
             <span class="badge" style="background:#e8f0fe;color:#1a73e8;border:1px solid #1a73e8;">👁️ 視覺辨識</span>
           {% elif p_src == 'html_text' %}
@@ -49,7 +50,7 @@
         <td class="{{ 'danger' if s.price_diff is not none and s.price_diff < 0 else '' }}">
           {{ s.price_diff|int if s.price_diff is not none else '-' }}
         </td>
-        <td>{{ s.candidate_status|status_label }}</td>
+        <td>{{ s|snapshot_status|status_label }}</td>
         <td>{{ s.seller[:10] }}</td>
         <td>
           <a href="{{ s.url | canonical_url }}" target="_blank" style="text-decoration:none;">商品連結</a>

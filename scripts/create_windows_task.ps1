@@ -16,7 +16,10 @@ try {
         -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`"" `
         -WorkingDirectory $ProjectRoot
 
-    $Trigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
+    $Trigger = New-ScheduledTaskTrigger `
+        -Weekly `
+        -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday `
+        -At 8:00AM
 
     $Settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -39,10 +42,9 @@ try {
 
     Write-Host "已建立 Windows 工作排程：$TaskName" -ForegroundColor Green
     Write-Host "專案根目錄：$ProjectRoot"
-    Write-Host "排程時間：每日 08:00"
+    Write-Host "排程時間：週一至週五 08:00"
 }
 catch {
     Write-Host "建立 Windows 工作排程失敗：$($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
-

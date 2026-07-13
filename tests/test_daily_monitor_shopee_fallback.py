@@ -3,7 +3,7 @@ from pathlib import Path
 from src.config import AppConfig
 from src.database import Database
 from src.extractors import ExtractionResult
-from src.search.feebee_api import FeebeeListing
+from src.search.base import SearchResult
 from src.services.daily_monitor import DailyMonitorService
 
 
@@ -28,17 +28,21 @@ def test_shopee_blocked_uses_feebee_fallback(monkeypatch, tmp_path: Path) -> Non
         error_message="blocked",
     )
 
-    def fake_best_listing(*args, **kwargs):
-        return FeebeeListing(
-            title="AFC GENKI+元氣習慣(60包/盒) 全球藥局",
-            url="https://feebee.com.tw/s/test",
-            platform="shopee",
-            seller="蝦皮商城 - 全球藥局",
-            price=1380,
-            price_text="$ 1,380",
-        )
+    class FakeFallbackChain:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    monkeypatch.setattr("src.services.feebee_price_provider.find_best_feebee_listing", fake_best_listing)
+        def search(self, product, max_results):
+            return [SearchResult(
+                source="feebee",
+                url="https://feebee.com.tw/s/test",
+                product_name="AFC GENKI+元氣習慣(60包/盒) 全球藥局",
+                found_price=1380,
+                platform="shopee",
+                seller="蝦皮商城 - 全球藥局",
+            )]
+
+    monkeypatch.setattr("src.services.fallback_price_provider.ChainSearchProvider", FakeFallbackChain)
 
     extraction = service.check_single_candidate(candidate_id)
 
@@ -72,17 +76,21 @@ def test_shopee_search_failed_uses_feebee_fallback(monkeypatch, tmp_path: Path) 
         error_message="all Shopee providers failed",
     )
 
-    def fake_best_listing(*args, **kwargs):
-        return FeebeeListing(
-            title="【AFC宇勝】究極金盞花膠囊(60顆) 葉黃素 日本原裝 | 全球藥局",
-            url="https://feebee.com.tw/s/test",
-            platform="shopee",
-            seller="蝦皮商城 - 全球藥局｜全球藥局e購網",
-            price=3200,
-            price_text="$ 3,200",
-        )
+    class FakeFallbackChain:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    monkeypatch.setattr("src.services.feebee_price_provider.find_best_feebee_listing", fake_best_listing)
+        def search(self, product, max_results):
+            return [SearchResult(
+                source="feebee",
+                url="https://feebee.com.tw/s/test",
+                product_name="【AFC宇勝】究極金盞花膠囊(60顆) 葉黃素 日本原裝 | 全球藥局",
+                found_price=3200,
+                platform="shopee",
+                seller="蝦皮商城 - 全球藥局｜全球藥局e購網",
+            )]
+
+    monkeypatch.setattr("src.services.fallback_price_provider.ChainSearchProvider", FakeFallbackChain)
 
     extraction = service.check_single_candidate(candidate_id)
 

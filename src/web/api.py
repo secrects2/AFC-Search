@@ -39,9 +39,20 @@ def format_tz(iso_str: str) -> str:
     except Exception:
         return iso_str[:16]
 
+def snapshot_status(snapshot: Any) -> str:
+    """Return the user-facing status for a monitoring snapshot."""
+    if isinstance(snapshot, dict):
+        if snapshot.get("final_status") == "needs_review":
+            return "needs_review"
+        return str(snapshot.get("candidate_status") or snapshot.get("violation_status") or "")
+    if getattr(snapshot, "final_status", "") == "needs_review":
+        return "needs_review"
+    return getattr(snapshot, "candidate_status", "") or ""
+
 def status_label(status: str) -> str:
     from markupsafe import Markup
     mapping = {
+        "needs_review": "待人工確認",
         "normal": "正常",
         "suspected_violation": "監控中",
         "price_unknown": "未抓到價格",
@@ -53,6 +64,7 @@ def status_label(status: str) -> str:
     color = "#333"
     if status == "suspected_violation": color = "#d93025"
     elif status == "normal": color = "#166534"
+    elif status == "needs_review": color = "#b45309"
     elif status == "takedown_notified": color = "#b45309"
     elif status in ("error", "blocked"): color = "#d93025"
     return Markup(f'<span style="color: {color}; font-weight: 600;">{label}</span>')
@@ -130,6 +142,7 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     templates.env.filters["fromjson"] = json.loads
     templates.env.filters["format_tz"] = format_tz
     templates.env.filters["status_label"] = status_label
+    templates.env.filters["snapshot_status"] = snapshot_status
     templates.env.filters["format_source"] = format_source_label
     templates.env.filters["canonical_url"] = canonical_url
 
@@ -459,7 +472,9 @@ def create_app(project_root: Path | None = None) -> FastAPI:
     ):
         violation_only = status == "suspected_violation"
         snapshots = db.get_snapshots(violation_only=violation_only, limit=500)
-        if status and status != "suspected_violation":
+        if status == "needs_review":
+            snapshots = [s for s in snapshots if s.final_status == "needs_review"]
+        elif status and status != "suspected_violation":
             snapshots = [s for s in snapshots if s.candidate_status == status]
         return _render(
             request, "results.html", active="results",

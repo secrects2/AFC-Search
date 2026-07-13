@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS product_candidates (
     status TEXT DEFAULT 'active'
         CHECK(status IN ('active','normal','suspected_violation',
                          'price_unknown','excluded','error','inactive','blocked',
-                         'takedown_notified')),
+                         'takedown_notified','source_dead','rate_limited',
+                         'captcha_required','skipped')),
     source_found_by TEXT DEFAULT 'manual'
         CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                    'crawler','mcp','findprice','shopee',
@@ -347,11 +348,13 @@ class Database:
                 status TEXT DEFAULT 'active'
                     CHECK(status IN ('active','normal','suspected_violation',
                                      'price_unknown','excluded','error','inactive','blocked',
-                                     'takedown_notified')),
+                                     'takedown_notified','source_dead','rate_limited',
+                                     'captcha_required','skipped')),
                 source_found_by TEXT DEFAULT 'manual'
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
-                                               'findprice_shopee')),
+                                               'findprice_shopee','feebee','biggo',
+                                               'lbj','fallback')),
                 raw_data TEXT DEFAULT '{}'
             )
             """
@@ -366,7 +369,8 @@ class Database:
                    CASE
                        WHEN source_found_by IN (
                            'manual','serper','serpapi','brave','crawler','mcp',
-                           'findprice','shopee','findprice_shopee'
+                           'findprice','shopee','findprice_shopee','feebee','biggo',
+                           'lbj','fallback'
                        )
                        THEN source_found_by
                        ELSE 'crawler'
@@ -411,11 +415,13 @@ class Database:
                 status TEXT DEFAULT 'active'
                     CHECK(status IN ('active','normal','suspected_violation',
                                      'price_unknown','excluded','error','inactive','blocked',
-                                     'takedown_notified')),
+                                     'takedown_notified','source_dead','rate_limited',
+                                     'captcha_required','skipped')),
                 source_found_by TEXT DEFAULT 'manual'
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
-                                               'findprice_shopee')),
+                                               'findprice_shopee','feebee','biggo',
+                                               'lbj','fallback')),
                 raw_data TEXT DEFAULT '{}'
             )
             """
@@ -551,19 +557,32 @@ class Database:
         seller: str = "",
         source_found_by: str = "manual",
         status: str = "active",
+        last_price: float | None = None,
+        raw_data: dict[str, Any] | None = None,
     ) -> int:
         """Insert or update a candidate by URL. Returns candidate id."""
+        raw_json = json.dumps(raw_data, ensure_ascii=False) if raw_data is not None else None
         with self._cursor() as (conn, cur):
             cur.execute(
                 "SELECT id FROM product_candidates WHERE url=?", (url,),
             )
             row = cur.fetchone()
             if row:
+                updates = [
+                    "product_id=?", "platform=?", "title=?",
+                    "seller=?", "source_found_by=?",
+                ]
+                params: list[Any] = [product_id, platform, title, seller, source_found_by]
+                if last_price is not None:
+                    updates.append("last_price=?")
+                    params.append(last_price)
+                if raw_json is not None:
+                    updates.append("raw_data=?")
+                    params.append(raw_json)
+                params.append(row["id"])
                 cur.execute(
-                    """UPDATE product_candidates SET product_id=?, platform=?,
-                       title=?, seller=?, source_found_by=?
-                       WHERE id=?""",
-                    (product_id, platform, title, seller, source_found_by, row["id"]),
+                    f"UPDATE product_candidates SET {', '.join(updates)} WHERE id=?",
+                    params,
                 )
                 return row["id"]
             cur.execute(
@@ -573,7 +592,22 @@ class Database:
                    VALUES (?,?,?,?,?,?,?)""",
                 (product_id, platform, title, url, seller, source_found_by, status),
             )
-            return cur.lastrowid  # type: ignore[return-value]
+            candidate_id = cur.lastrowid
+            if last_price is not None or raw_json is not None:
+                updates = []
+                params = []
+                if last_price is not None:
+                    updates.append("last_price=?")
+                    params.append(last_price)
+                if raw_json is not None:
+                    updates.append("raw_data=?")
+                    params.append(raw_json)
+                params.append(candidate_id)
+                cur.execute(
+                    f"UPDATE product_candidates SET {', '.join(updates)} WHERE id=?",
+                    params,
+                )
+            return candidate_id  # type: ignore[return-value]
 
     def get_active_candidates(self, product_id: int | None = None) -> list[CandidateRow]:
         """Get candidates with status in (active, normal, suspected_violation, price_unknown)."""
@@ -968,6 +1002,21 @@ class Database:
             )
             price_unknown = cur.fetchone()["c"]
             cur.execute(
+                """SELECT COUNT(*) AS c
+                   FROM (
+                       SELECT s.final_status,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY s.candidate_id
+                                  ORDER BY s.checked_at DESC
+                              ) AS rn
+                       FROM price_snapshots s
+                       JOIN product_candidates c ON c.id = s.candidate_id
+                       WHERE c.status != 'excluded'
+                   ) latest
+                   WHERE rn = 1 AND final_status = 'needs_review'"""
+            )
+            needs_review = cur.fetchone()["c"]
+            cur.execute(
                 "SELECT COUNT(*) AS c FROM product_candidates WHERE status='takedown_notified'"
             )
             takedown_notified = cur.fetchone()["c"]
@@ -981,6 +1030,7 @@ class Database:
                 "active_candidates": active_candidates,
                 "violations": violations,
                 "price_unknown": price_unknown,
+                "needs_review": needs_review,
                 "takedown_notified": takedown_notified,
                 "last_check_time": last_check or "",
             }
@@ -1011,8 +1061,8 @@ class Database:
         if not row:
             return
         schema_sql = row["sql"] or ""
-        # Already migrated if 'source_dead' and 'feebee' are present
-        if "source_dead" in schema_sql and "feebee" in schema_sql:
+        # Already migrated only when all current multi-source values exist.
+        if all(value in schema_sql for value in ("source_dead", "feebee", "biggo", "lbj", "fallback")):
             return
 
         LOGGER.info("Migration: expanding product_candidates for multi-source support")
@@ -1039,7 +1089,8 @@ class Database:
                 source_found_by TEXT DEFAULT 'manual'
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
-                                               'findprice_shopee','feebee')),
+                                               'findprice_shopee','feebee','biggo',
+                                               'lbj','fallback')),
                 raw_data TEXT DEFAULT '{}',
                 UNIQUE(product_id, url)
             )
@@ -1244,4 +1295,3 @@ class Database:
             count = cur.rowcount
             LOGGER.info("Disabled %d FindPrice candidates as source_dead", count)
             return count
-

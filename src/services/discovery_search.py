@@ -157,8 +157,11 @@ class DiscoverySearchService:
                 url=sr.url,
                 platform=platform,
                 title=sr.product_name,
+                seller=sr.seller,
                 source_found_by=sr.source or "serpapi",
                 status=status,
+                last_price=sr.found_price,
+                raw_data=sr.raw_data or None,
             )
             new_count += 1
             if score < 70:

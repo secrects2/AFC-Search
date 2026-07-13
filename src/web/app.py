@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def _format_tz(iso_str: str) -> str:
 
 def _status_label(status: str) -> str:
     labels = {
+        "needs_review": "待人工確認",
         "normal": "正常",
         "suspected_violation": "疑似破價",
         "price_unknown": "未抓到價格",
@@ -57,6 +59,24 @@ def _status_label(status: str) -> str:
     return labels.get(status, status) if status else ""
 
 
+def _snapshot_status(snapshot: object) -> str:
+    if isinstance(snapshot, dict):
+        if snapshot.get("final_status") == "needs_review":
+            return "needs_review"
+        return str(snapshot.get("candidate_status") or snapshot.get("violation_status") or "")
+    return ""
+
+
+def _canonical_url(url: str) -> str:
+    if not url:
+        return ""
+    if "shopee.tw" in url:
+        match = re.search(r"-i\.(\d+)\.(\d+)", url)
+        if match:
+            return f"https://shopee.tw/product/{match.group(1)}/{match.group(2)}"
+    return url
+
+
 def create_app(project_root: Path | None = None) -> Flask:
     root = project_root or Path(__file__).resolve().parents[2]
     app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -65,6 +85,8 @@ def create_app(project_root: Path | None = None) -> Flask:
     app.jinja_env.filters["fromjson"] = _fromjson
     app.jinja_env.filters["format_tz"] = _format_tz
     app.jinja_env.filters["status_label"] = _status_label
+    app.jinja_env.filters["snapshot_status"] = _snapshot_status
+    app.jinja_env.filters["canonical_url"] = _canonical_url
 
     @app.context_processor
     def inject_globals() -> dict[str, object]:

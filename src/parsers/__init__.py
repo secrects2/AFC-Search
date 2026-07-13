@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 from src.config import AppConfig
 from src.parsers.base import BaseParser
+from src.parsers.coupang import CoupangParser
 from src.parsers.generic import GenericParser
 from src.parsers.momo import MomoParser
 from src.parsers.pchome import PChomeParser
@@ -23,10 +24,11 @@ def get_parser(platform: str, url: str, config: AppConfig) -> BaseParser:
         return YahooParser(config)
     if "pchome" in normalized or "pchome" in host:
         return PChomeParser(config)
+    if "coupang" in normalized or "coupang" in host:
+        return CoupangParser(config)
     if normalized == "ruten" or "ruten.com.tw" in host:
         return RutenParser(config)
     return GenericParser(config)
 
 
 __all__ = ["get_parser"]
-

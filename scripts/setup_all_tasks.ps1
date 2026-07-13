@@ -65,15 +65,18 @@ Register-ScheduledTask `
 Write-Host "  OK - Dashboard will start on logon (port 8002)" -ForegroundColor Green
 
 # ---------------------------------------------------------------
-# 2. Daily Monitor - every day at 08:00
+# 2. Daily Monitor - Monday to Friday at 08:00
 # ---------------------------------------------------------------
-Write-Host "[2/4] Daily monitor at 08:00..."
+Write-Host "[2/4] Daily monitor Monday-Friday at 08:00..."
 
 $dailyAction = New-ScheduledTaskAction `
     -Execute (Join-Path $ProjectRoot "run_daily_monitor.bat") `
     -WorkingDirectory $ProjectRoot
 
-$dailyTrigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
+$dailyTrigger = New-ScheduledTaskTrigger `
+    -Weekly `
+    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday `
+    -At 8:00AM
 
 Register-ScheduledTask `
     -TaskName "$TaskPrefix - Daily Monitor" `
@@ -84,7 +87,7 @@ Register-ScheduledTask `
     -Description "AFC Daily price check for known URLs" `
     -Force | Out-Null
 
-Write-Host "  OK - Daily monitor at 08:00" -ForegroundColor Green
+Write-Host "  OK - Daily monitor Monday-Friday at 08:00" -ForegroundColor Green
 
 # ---------------------------------------------------------------
 # 3. Weekly Discovery - Monday 09:00
@@ -139,7 +142,7 @@ Write-Host "  All tasks created successfully!"
 Write-Host "======================================="
 Write-Host ""
 Write-Host "  [v] Dashboard       -> auto-start on logon" -ForegroundColor Green
-Write-Host "  [v] Daily Monitor   -> every day 08:00" -ForegroundColor Green
+Write-Host "  [v] Daily Monitor   -> Monday-Friday 08:00" -ForegroundColor Green
 Write-Host "  [v] Weekly Discovery-> Monday 09:00" -ForegroundColor Green
 Write-Host "  [v] Monthly Scan    -> every 4 weeks Sunday 10:00" -ForegroundColor Green
 Write-Host ""

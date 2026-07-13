@@ -1,7 +1,15 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.monitor_catalog import ACTIVE_STATUS, PENDING_REVIEW_STATUS, read_official_products, write_official_products
+from src.web.api import snapshot_status
 from src.web.app import create_app
+
+
+def test_snapshot_status_prefers_manual_review_decision() -> None:
+    snapshot = SimpleNamespace(candidate_status="price_unknown", final_status="needs_review")
+
+    assert snapshot_status(snapshot) == "needs_review"
 
 
 def test_dashboard_and_download_routes(tmp_path: Path) -> None:

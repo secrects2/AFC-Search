@@ -27,6 +27,7 @@ DAILY_COLUMNS = [
     ("最終狀態", "final_status"),
     ("直接抓價", "direct_price"),
     ("飛比抓價", "feebee_price"),
+    ("LBJ抓價", "lbj_price"),
     ("人工價格", "manual_price"),
     ("決策原因", "decision_reason"),
     ("舊有抓價", "price"),
@@ -126,6 +127,8 @@ class ReportService:
                     value = raw_data_dict.get("all_prices", {}).get("direct_html", "")
                 elif attr == "feebee_price":
                     value = raw_data_dict.get("all_prices", {}).get("feebee", "")
+                elif attr == "lbj_price":
+                    value = raw_data_dict.get("all_prices", {}).get("lbj", "")
                 elif attr == "manual_price":
                     value = raw_data_dict.get("all_prices", {}).get("manual", "")
                 elif attr == "is_violation":
@@ -195,6 +198,8 @@ class ReportService:
                         value = raw_data_dict.get("all_prices", {}).get("direct_html", "")
                     elif attr == "feebee_price":
                         value = raw_data_dict.get("all_prices", {}).get("feebee", "")
+                    elif attr == "lbj_price":
+                        value = raw_data_dict.get("all_prices", {}).get("lbj", "")
                     elif attr == "manual_price":
                         value = raw_data_dict.get("all_prices", {}).get("manual", "")
                     elif attr == "is_violation":

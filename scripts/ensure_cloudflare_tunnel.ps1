@@ -51,7 +51,7 @@ try {
     }
 
     $matchingProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "tunnel\s+run\s+$TunnelName" })
+        Where-Object { $_.CommandLine -match "\btunnel\b.*\brun\s+$TunnelName\b" })
 
     if ($matchingProcesses.Count -eq 0) {
         Start-Process -FilePath $TunnelBatchPath -WorkingDirectory $ProjectRoot -WindowStyle Hidden | Out-Null

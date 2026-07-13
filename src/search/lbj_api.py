@@ -24,6 +24,70 @@ class LbjListing:
     price: float | None
     price_text: str
     platform: str = "lbj"
+    seller: str = ""
+    product_id: str = ""
+    search_url: str = ""
+
+
+def _detect_platform_from_site(site: str) -> str:
+    value = (site or "").lower()
+    if "蝦皮" in site or "shopee" in value:
+        return "shopee"
+    if "momo" in value or "富邦購物" in site:
+        return "momo"
+    if "pchome" in value:
+        return "pchome"
+    if "yahoo" in value or "雅虎" in site:
+        return "yahoo"
+    if "露天" in site or "ruten" in value:
+        return "ruten"
+    if "樂天" in site or "rakuten" in value:
+        return "rakuten"
+    if "東森" in site or "etmall" in value:
+        return "etmall"
+    return "lbj"
+
+
+def parse_lbj_html(
+    html: str,
+    query_url: str,
+    max_results: int = 100,
+) -> list[LbjListing]:
+    """Parse each product card from an LBJ comparison search page."""
+    soup = BeautifulSoup(html, "html.parser")
+    listings: list[LbjListing] = []
+    seen: set[str] = set()
+
+    # Each card has two buttons with the same data-pid. The first button
+    # carries the complete product metadata, so deduplicate by data-pid.
+    for item in soup.select("[data-pid][data-gn][data-url][data-price]"):
+        product_id = (item.get("data-pid") or "").strip()
+        title = " ".join((item.get("data-gn") or "").split())
+        href = urllib.parse.urljoin(query_url, (item.get("data-url") or "").strip())
+        price_text = (item.get("data-price") or "").strip()
+        site = " ".join((item.get("data-site") or "").split())
+        key = product_id or f"{href}|{title}"
+
+        if not title or not href or key in seen:
+            continue
+        seen.add(key)
+
+        listings.append(
+            LbjListing(
+                title=title,
+                url=href,
+                price=parse_price_value(price_text),
+                price_text=price_text,
+                platform=_detect_platform_from_site(site),
+                seller=site,
+                product_id=product_id,
+                search_url=query_url,
+            )
+        )
+        if len(listings) >= max_results:
+            break
+
+    return listings
 
 
 def search_lbj_listings(
@@ -58,43 +122,7 @@ def search_lbj_listings(
         LOGGER.warning("LBJ search failed for keyword '%s': %s", keyword, exc)
         return []
 
-    soup = BeautifulSoup(html, "html.parser")
-    listings = []
-    seen = set()
-
-    for item in soup.select("a"):
-        title = item.get_text(strip=True)
-        href = item.get("href", "")
-        
-        # Very simple heuristic: if it looks like a product link and matches keyword loosely
-        if not title or not href:
-            continue
-            
-        if "Default.aspx" in href or "Query.aspx" in href or "Login" in href:
-            continue
-            
-        # If the search results format changes, we might just grab the URL and title.
-        # LBJ is an aggregator, so prices might be displayed in nearby elements.
-        # For a basic integration, we just return the link as the candidate.
-        
-        # Actually, since LBJ html was not returning many items in our test,
-        # we will use a generic fallback: If we can't extract cleanly, we yield the search page itself
-        # with a unique suffix, so Feebee fallback can take over later.
-        pass
-
-    # If parsing is too unstable, we just return the search URL as the candidate 
-    # and let Feebee/SerpAPI handle the real monitoring
-    listings.append(
-        LbjListing(
-            title=f"LBJ Search: {keyword}",
-            url=url,
-            price=None,
-            price_text="",
-            platform="lbj"
-        )
-    )
-
-    return listings
+    return parse_lbj_html(html, url, max_results=max_results)
 
 
 class LbjSearchProvider(BaseSearchProvider):
@@ -111,7 +139,9 @@ class LbjSearchProvider(BaseSearchProvider):
 
         listings = search_lbj_listings(
             keyword=product.product_name,
-            max_results=max_results,
+            # LBJ's page is a comparison table; retain the whole page even
+            # when the general discovery limit is smaller.
+            max_results=max(max_results, 100),
             delay_seconds=1.0,
         )
 
@@ -124,7 +154,15 @@ class LbjSearchProvider(BaseSearchProvider):
                     product_name=lst.title,
                     found_price=lst.price,
                     platform=lst.platform,
-                    seller="",
+                    seller=lst.seller,
+                    raw_data={
+                        "source": "lbj_search",
+                        "lbj_product_id": lst.product_id,
+                        "lbj_search_url": lst.search_url,
+                        "price_text": lst.price_text,
+                        "lbj_price": lst.price,
+                        "site": lst.seller,
+                    },
                 )
             )
 

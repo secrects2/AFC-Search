@@ -226,7 +226,7 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\create_windows_task.ps1
 AFC Price Monitor
 ```
 
-預設每日早上 8:00 執行，使用目前登入的 Windows 使用者，僅在使用者登入時執行。
+預設於週一至週五早上 8:00 執行，使用目前登入的 Windows 使用者，僅在使用者登入時執行。
 
 ### 第四步：確認排程是否建立成功
 

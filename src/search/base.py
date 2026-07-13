@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from src.loader import Product
 
@@ -18,6 +19,7 @@ class SearchResult:
     searched_at: str = ""
     found_price: float | None = None
     seller: str = ""
+    raw_data: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseSearchProvider:
