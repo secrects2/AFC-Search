@@ -21,12 +21,59 @@ _EMBEDDED_SALE_PRICE_KEYS = (
     "currentPrice",
 )
 
+_PRICE_NUMBER_RE = re.compile(r"(?<!\d)([0-9][0-9,]*(?:\.\d+)?)")
+_DISCOUNT_LABEL = "\u6298\u6263\u50f9"
+
 
 def _parse_positive_price(value: object) -> float | None:
     price = parse_price_value(value)
     if price is None or price <= 0 or price > 500000:
         return None
     return price
+
+
+def _extract_labeled_price(value: object) -> float | None:
+    """Extract the amount from a price label such as '折扣價 2850元'."""
+    text = str(value or "")
+    if not re.search(r"(?:\$|NT\$|NTD|TWD|\u5143)", text, re.IGNORECASE):
+        return None
+    for raw_price in reversed(_PRICE_NUMBER_RE.findall(text)):
+        price = _parse_positive_price(raw_price)
+        if price is not None and price >= 50:
+            return price
+    return None
+
+
+def _extract_pchome_discount_price(html_text: str) -> float | None:
+    """Read the explicitly labelled PChome discount price before other prices."""
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+
+        soup = BeautifulSoup(html_text, "html.parser")
+        product_root = soup.select_one("#ProdBriefing") or soup
+
+        for node in product_root.select("[aria-label]"):
+            aria_label = str(node.get("aria-label") or "")
+            if _DISCOUNT_LABEL not in aria_label:
+                continue
+            price = _extract_labeled_price(aria_label)
+            if price is not None:
+                return price
+
+        # Older layouts may expose the label only in the price block text.
+        for node in product_root.select(".o-prodPrice"):
+            classes = " ".join(str(value) for value in node.get("class", []))
+            text = node.get_text(" ", strip=True)
+            if _DISCOUNT_LABEL not in text and "discountmain" not in classes.lower():
+                continue
+            price = _extract_labeled_price(
+                " ".join((str(node.get("aria-label") or ""), text))
+            )
+            if price is not None:
+                return price
+    except Exception:
+        pass
+    return None
 
 
 def _extract_pchome_main_price(html_text: str) -> tuple[float | None, str]:
@@ -36,6 +83,10 @@ def _extract_pchome_main_price(html_text: str) -> tuple[float | None, str]:
     GTM marker is the most reliable one, while the other data attributes and
     embedded sale-price keys cover newer and cached page variants.
     """
+    discount_price = _extract_pchome_discount_price(html_text)
+    if discount_price is not None:
+        return discount_price, "pchome visible discount price"
+
     try:
         from bs4 import BeautifulSoup  # type: ignore
 

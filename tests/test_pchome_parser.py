@@ -16,6 +16,26 @@ def test_pchome_parser_prefers_visible_product_price_marker() -> None:
     assert evidence == "pchome data-gtm-price"
 
 
+def test_pchome_parser_prefers_discount_price_over_network_price() -> None:
+    html = """
+    <div id="ProdBriefing">
+      <div class="o-prodPrice o-prodPrice--discountMainPrice"
+           aria-label="\u5546\u54c1\u50f9\u683c \u6298\u6263\u50f9 2850\u5143">
+        <div class="o-prodPrice__price">$2,850</div>
+      </div>
+      <div class="o-prodPrice o-prodPrice--discountSubPrice"
+           aria-label="\u7db2\u8def\u50f9 3000\u5143">
+        <div class="o-prodPrice__originalPrice">$3,000</div>
+      </div>
+    </div>
+    """
+
+    price, evidence = PChomeParser.extract_price(html, "")
+
+    assert price == 2850.0
+    assert evidence == "pchome visible discount price"
+
+
 def test_pchome_parser_falls_back_when_product_marker_is_missing() -> None:
     price, evidence = PChomeParser.extract_price(
         "<html><body>售價 $2,480 原價 $2,880</body></html>",

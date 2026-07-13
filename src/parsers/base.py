@@ -55,6 +55,10 @@ class BaseParser:
                 "Chrome/124.0 Safari/537.36 AFCPriceMonitor/1.0"
             )
         }
+        if (platform or "").lower() == "pchome":
+            # PChome currently rate-limits the monitor-specific UA. Let
+            # requests use its default UA for the direct public page fetch.
+            headers = {}
 
         # Determine if proxy should be used for this platform
         proxies = None
