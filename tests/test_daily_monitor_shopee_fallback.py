@@ -1,10 +1,14 @@
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 from src.config import AppConfig
 from src.database import Database
 from src.extractors import ExtractionResult
 from src.search.base import SearchResult
 from src.services.daily_monitor import DailyMonitorService
+from src.services.daily_monitor import DailyMonitorResult
 
 
 def test_shopee_blocked_uses_feebee_fallback(monkeypatch, tmp_path: Path) -> None:
@@ -46,13 +50,15 @@ def test_shopee_blocked_uses_feebee_fallback(monkeypatch, tmp_path: Path) -> Non
 
     extraction = service.check_single_candidate(candidate_id)
 
-    assert extraction.parse_status == "ok"
+    assert extraction.parse_status == "price_not_found"
     assert extraction.price == 1380
     assert extraction.raw_data["price_source"] == "feebee"
 
     candidate = db.list_candidates()[0]
-    assert candidate.status == "normal"
+    assert candidate.status == "price_unknown"
     assert candidate.last_price == 1380
+    snapshot = db.get_snapshots()[0]
+    assert snapshot.final_status == "needs_review"
 
 
 def test_shopee_search_failed_uses_feebee_fallback(monkeypatch, tmp_path: Path) -> None:
@@ -94,6 +100,78 @@ def test_shopee_search_failed_uses_feebee_fallback(monkeypatch, tmp_path: Path) 
 
     extraction = service.check_single_candidate(candidate_id)
 
-    assert extraction.parse_status == "ok"
+    assert extraction.parse_status == "price_not_found"
     assert extraction.price == 3200
     assert extraction.raw_data["price_source"] == "feebee"
+
+
+@pytest.mark.parametrize("platform", ["momo", "yahoo", "ruten", "shopee", "pchome", "coupang"])
+def test_all_platforms_share_the_same_fallback_entrypoint(
+    monkeypatch, tmp_path: Path, platform: str
+) -> None:
+    db = Database(tmp_path / f"{platform}.db")
+    product_id = db.upsert_product(f"AFC {platform} 商品", suggested_price=1200)
+    candidate_id = db.upsert_candidate(
+        product_id=product_id,
+        url=f"https://{platform}.example/item/1",
+        platform=platform,
+        title=f"AFC {platform} 商品",
+        source_found_by="manual",
+    )
+    config = AppConfig(request_delay_seconds=0, enable_image_match=False)
+    service = DailyMonitorService(db, config, tmp_path)
+    service.extractor.extract = lambda **kwargs: ExtractionResult(
+        title=f"AFC {platform} 商品",
+        price=None,
+        platform=platform,
+        parse_status="page_blocked",
+        error_message="blocked",
+    )
+    fallback = MagicMock(return_value={
+        "source": "feebee",
+        "platform": platform,
+        "url": "https://feebee.com.tw/s/test",
+        "title": f"AFC {platform} 商品",
+        "seller": "",
+        "price": 1100,
+        "currency": "TWD",
+        "match_score": 100,
+        "confidence": 0.8,
+        "status": "success",
+        "error_message": "",
+        "raw_data": {},
+    })
+    service.fallback_provider.observe = fallback
+
+    candidate = db.list_candidates()[0]
+    service._check_candidate(candidate, tmp_path / "screenshots", DailyMonitorResult())
+
+    assert fallback.called
+    assert db.list_candidates()[0].status == "price_unknown"
+    assert db.get_snapshots()[0].final_status == "needs_review"
+
+
+def test_direct_success_does_not_trigger_fallback(tmp_path: Path) -> None:
+    db = Database(tmp_path / "direct.db")
+    product_id = db.upsert_product("AFC 直連商品", suggested_price=1200)
+    candidate_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://momo.com.tw/item/1",
+        platform="momo",
+        title="AFC 直連商品",
+        source_found_by="manual",
+    )
+    config = AppConfig(request_delay_seconds=0, enable_image_match=False)
+    service = DailyMonitorService(db, config, Path(tmp_path))
+    service.extractor.extract = lambda **kwargs: ExtractionResult(
+        title="AFC 直連商品",
+        price=1200,
+        platform="momo",
+        parse_status="ok",
+    )
+    fallback = MagicMock()
+    service.fallback_provider.observe = fallback
+
+    service.check_single_candidate(candidate_id)
+
+    fallback.assert_not_called()

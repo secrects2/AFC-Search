@@ -54,7 +54,14 @@ class DailyMonitorService:
         self.rate_limiter = PlatformRateLimiter(config.platform_rate_limits, db)
         self.health_tracker = SourceHealthTracker(db)
         self.fallback_provider = FallbackPriceProvider(
-            {"request_timeout_seconds": config.request_timeout_seconds}, db
+            {
+                "request_timeout_seconds": config.request_timeout_seconds,
+                "serpapi_api_key": config.serpapi_api_key,
+                "brave_api_key": config.brave_api_key,
+                "platforms": config.platforms,
+                "max_results_per_product": config.max_results_per_product,
+            },
+            db,
         )
         # Keep the old attribute name available for integrations and tests
         # while the monitor uses the multi-source fallback provider.
@@ -374,28 +381,68 @@ class DailyMonitorService:
             self.health_tracker.record("lbj", platform_lower, "success")
 
         # -------------------------------------------------------------------
-        # Source 2: Fallback Providers (Feebee, BigGo, LBJ)
+        # Source 2: Universal fallback providers
         # -------------------------------------------------------------------
-        fallback_obs = self.fallback_provider.observe(product, candidate)
-        if fallback_obs:
-            self.db.insert_observation(
-                product_id=candidate.product_id,
-                candidate_id=candidate.id,
-                **fallback_obs
+        # A successful direct price is authoritative enough for this run. The
+        # search chain is reserved for blocked pages, missing/invalid prices,
+        # skipped direct crawls, and other direct extraction failures.
+        direct_failed = (
+            skip_direct
+            or direct_extraction is None
+            or direct_extraction.parse_status != "ok"
+            or direct_extraction.price is None
+            or direct_extraction.price <= 0
+            or direct_extraction.price > 500_000
+        )
+        fallback_obs = None
+        if direct_failed:
+            fallback_obs = self.fallback_provider.observe(product, candidate)
+            direct_failure_status = direct_status or (
+                direct_extraction.parse_status if direct_extraction else "not_attempted"
             )
-            self.health_tracker.record(fallback_obs["source"], fallback_obs["platform"], fallback_obs["status"])
-        else:
-            # Record failure
-            self.db.insert_observation(
-                product_id=candidate.product_id,
-                candidate_id=candidate.id,
-                platform=platform_lower,
-                source="fallback",
-                url="",
-                status="price_unknown",
-                error_message="Fallback providers returned no results or excluded"
+            direct_failure_reason = (
+                direct_extraction.error_message
+                or direct_extraction.raw_data.get("evidence_text", "")
+                if direct_extraction
+                else "direct crawl was skipped"
             )
-            self.health_tracker.record("fallback", platform_lower, "price_unknown")
+
+            if fallback_obs:
+                fallback_raw_data = dict(fallback_obs.get("raw_data") or {})
+                fallback_raw_data.update({
+                    "fallback_trigger": "direct_price_unavailable",
+                    "direct_failure_status": direct_failure_status,
+                    "direct_failure_reason": direct_failure_reason,
+                })
+                fallback_obs["raw_data"] = fallback_raw_data
+                self.db.insert_observation(
+                    product_id=candidate.product_id,
+                    candidate_id=candidate.id,
+                    **fallback_obs
+                )
+                self.health_tracker.record(
+                    fallback_obs["source"], fallback_obs["platform"], fallback_obs["status"]
+                )
+            else:
+                # Persist the complete provider audit even when every backup
+                # source fails, so the next review can explain what happened.
+                fallback_audit = self.fallback_provider.last_audit
+                fallback_audit.update({
+                    "fallback_trigger": "direct_price_unavailable",
+                    "direct_failure_status": direct_failure_status,
+                    "direct_failure_reason": direct_failure_reason,
+                })
+                self.db.insert_observation(
+                    product_id=candidate.product_id,
+                    candidate_id=candidate.id,
+                    platform=platform_lower,
+                    source="fallback",
+                    url="",
+                    status="price_unknown",
+                    error_message="Fallback providers returned no usable results",
+                    raw_data=fallback_audit,
+                )
+                self.health_tracker.record("fallback", platform_lower, "price_unknown")
 
         # -------------------------------------------------------------------
         # Make Final Decision

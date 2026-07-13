@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 from src.database import Database
 from src.services.final_price import select_final_price
 
@@ -19,7 +20,7 @@ def test_select_final_price_single_direct():
     assert decision.final_price_source == "direct_html"
 
 def test_select_final_price_feebee_fallback():
-    """Test final price falls back to feebee when direct fails."""
+    """A Feebee price is retained but requires review after direct failure."""
     obs = [
         SimpleNamespace(
             source="direct_html",
@@ -38,7 +39,7 @@ def test_select_final_price_feebee_fallback():
     ]
     decision = select_final_price(1, obs, 120)
     assert decision.final_price == 120
-    assert decision.final_status == "likely_price"
+    assert decision.final_status == "needs_review"
     assert decision.final_price_source == "feebee"
 
 def test_select_final_price_pchome_blocked_fallback_needs_review():
@@ -173,6 +174,35 @@ def test_select_final_price_needs_review():
     assert decision.final_price == 110
     assert decision.final_status == "needs_review"
     assert decision.final_price_source == "feebee"
+
+
+@pytest.mark.parametrize("platform", ["momo", "yahoo", "ruten", "shopee", "pchome", "coupang"])
+def test_all_platform_fallback_prices_require_review(platform: str):
+    """Every platform uses the same review rule for a backup price."""
+    obs = [
+        SimpleNamespace(
+            platform=platform,
+            source="direct_html",
+            price=None,
+            status="price_unknown",
+            match_score=0,
+            confidence=0.0,
+        ),
+        SimpleNamespace(
+            platform=platform,
+            source="findprice",
+            price=120,
+            status="success",
+            match_score=95,
+            confidence=0.8,
+        ),
+    ]
+
+    decision = select_final_price(1, obs, 120)
+
+    assert decision.final_price == 120
+    assert decision.final_price_source == "findprice"
+    assert decision.final_status == "needs_review"
 
 def test_select_final_price_suspected_violation():
     """Test violation detection."""

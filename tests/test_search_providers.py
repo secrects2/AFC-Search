@@ -272,6 +272,25 @@ def test_chain_falls_back_on_failure(tmp_path: Path) -> None:
     assert results[0].source == "ok_brave"
 
 
+def test_chain_records_provider_attempts() -> None:
+    product = _make_product()
+
+    class EmptyProvider(BraveSearchProvider):
+        name = "empty_provider"
+        enabled = True
+
+        def search(self, product, max_results):
+            return []
+
+    chain = ChainSearchProvider(providers=[EmptyProvider("k", [])])
+    assert chain.search(product, 5) == []
+    assert chain.last_attempts == [{
+        "provider": "empty_provider",
+        "status": "no_results",
+        "result_count": 0,
+    }]
+
+
 def test_chain_returns_cached_results(tmp_path: Path) -> None:
     product = _make_product()
     cache = SearchCache(tmp_path / "c.json")
@@ -289,3 +308,4 @@ def test_chain_returns_cached_results(tmp_path: Path) -> None:
 def test_build_chain_provider_no_keys(tmp_path: Path) -> None:
     chain = build_chain_provider("", "", ["shopee"], tmp_path / "c.json")
     assert chain.enabled
+    assert "findprice" in [provider.name for provider in chain.providers]

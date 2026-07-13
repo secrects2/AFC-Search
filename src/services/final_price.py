@@ -46,7 +46,7 @@ def select_final_price(
 
         if obs.status in (
             "blocked", "captcha_required", "traffic_verify", 
-            "rate_limited", "source_dead", "error", "skipped_direct_crawl"
+            "rate_limited", "source_dead", "error", "skipped", "skipped_direct_crawl"
         ):
             continue
             
@@ -85,8 +85,12 @@ def select_final_price(
         "direct_json": 80,
         "direct_html": 70,
         "feebee": 60,
+        "findprice": 55,
         "biggo": 55,
         "lbj": 65,
+        "serpapi": 50,
+        "brave": 50,
+        "shopee": 50,
         "visual_ocr": 40,
     }
 
@@ -142,29 +146,37 @@ def select_final_price(
             if "direct" in best_obs.source and best_obs.match_score >= 85:
                 final_status = "verified_violation"
 
-    # PChome frequently blocks direct requests. A comparison-site price can be
-    # stale or represent a different price tier, so it must not be used as an
-    # automatic normal/violation decision when direct verification failed.
-    protected_platform_direct_blocked = (
-        getattr(best_obs, "platform", "").lower() in {"pchome", "coupang"}
-        and best_obs.source in {"feebee", "biggo", "lbj", "fallback"}
+    # Any price found through a backup search after direct verification failed
+    # is evidence for review, not an automatic normal/violation decision. This
+    # applies consistently to every platform, not only PChome or Coupang.
+    fallback_sources = {
+        "feebee", "findprice", "biggo", "lbj", "serpapi", "brave", "shopee",
+    }
+    direct_failure_statuses = {
+        "blocked",
+        "captcha_required",
+        "traffic_verify",
+        "rate_limited",
+        "source_dead",
+        "error",
+        "price_unknown",
+        "skipped",
+        "skipped_direct_crawl",
+    }
+    fallback_after_direct_failure = (
+        best_obs.source in fallback_sources
         and any(
             obs.source == "direct_html"
-            and obs.status in {
-                "blocked",
-                "captcha_required",
-                "traffic_verify",
-                "rate_limited",
-                "source_dead",
-                "error",
-            }
+            and obs.status in direct_failure_statuses
             for obs in observations
         )
     )
-    if protected_platform_direct_blocked:
+    if fallback_after_direct_failure:
         final_status = "needs_review"
         platform_name = getattr(best_obs, "platform", "").capitalize()
-        reason = f"{platform_name} 直連未驗證，備援平台價格僅供參考，待人工確認"
+        reason = (
+            f"{platform_name or '商品'} 直連價格不可用，備援來源價格僅供參考，待人工確認"
+        )
 
     return FinalPriceDecision(
         final_price=best_obs.price,

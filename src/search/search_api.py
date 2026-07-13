@@ -8,6 +8,7 @@ from src.loader import Product
 from src.search.base import BaseSearchProvider, SearchResult
 from src.search.brave_search import BraveSearchProvider
 from src.search.cache import SearchCache
+from src.search.findprice_api import FindPriceProvider
 from src.search.lbj_api import LbjSearchProvider
 from src.search.biggo_api import BigGoSearchProvider
 from src.search.feebee_search import FeebeeSearchProvider
@@ -30,6 +31,7 @@ class ChainSearchProvider(BaseSearchProvider):
         self.providers = [p for p in providers if getattr(p, "enabled", True)]
         self.cache = cache
         self._last_provider: str = ""
+        self._last_attempts: list[dict[str, object]] = []
 
     @property
     def enabled(self) -> bool:
@@ -39,12 +41,37 @@ class ChainSearchProvider(BaseSearchProvider):
     def last_provider(self) -> str:
         return self._last_provider
 
+    @property
+    def last_attempts(self) -> list[dict[str, object]]:
+        """Return a redacted audit trail for the most recent search."""
+        return [dict(attempt) for attempt in self._last_attempts]
+
+    @staticmethod
+    def _redact_error(exc: Exception) -> str:
+        """Keep provider diagnostics useful without persisting credentials."""
+        import re
+
+        message = str(exc)
+        message = re.sub(
+            r"(?i)(api[_-]?key|access[_-]?token|token|secret|password)=([^&\s]+)",
+            r"\1=[REDACTED]",
+            message,
+        )
+        return message[:300]
+
     def search(self, product: Product, max_results: int) -> list[SearchResult]:
+        self._last_attempts = []
+
         # Check cache first
         if self.cache:
             cached = self.cache.get(product.product_name)
             if cached is not None:
                 self._last_provider = f"{cached[0].source}(cached)" if cached else "cache"
+                self._last_attempts.append({
+                    "provider": "cache",
+                    "status": "cached",
+                    "result_count": len(cached),
+                })
                 LOGGER.info(
                     "使用快取結果：%s (%d 筆)",
                     product.product_name,
@@ -60,9 +87,16 @@ class ChainSearchProvider(BaseSearchProvider):
         # FindPrice candidates from being skipped when SerpAPI returns only
         # non-Shopee results first.
         for provider in self.providers:
+            attempt: dict[str, object] = {
+                "provider": provider.name,
+                "status": "started",
+                "result_count": 0,
+            }
             try:
                 results = provider.search(product, max_results)
                 if results:
+                    attempt["status"] = "success"
+                    attempt["result_count"] = len(results)
                     used_providers.append(provider.name)
                     LOGGER.info(
                         "%s 搜尋成功：%s (%d 筆)",
@@ -77,12 +111,15 @@ class ChainSearchProvider(BaseSearchProvider):
                         seen_urls.add(normalized_url)
                         combined.append(result)
                     continue
+                attempt["status"] = "no_results"
                 LOGGER.info(
                     "%s 無結果，嘗試下一個：%s",
                     provider.name,
                     product.product_name,
                 )
             except Exception as exc:
+                attempt["status"] = "error"
+                attempt["error"] = self._redact_error(exc)
                 LOGGER.warning(
                     "%s 搜尋失敗，嘗試下一個：%s - %s",
                     provider.name,
@@ -90,6 +127,8 @@ class ChainSearchProvider(BaseSearchProvider):
                     exc,
                 )
                 continue
+            finally:
+                self._last_attempts.append(attempt)
 
         if combined:
             self._last_provider = "+".join(used_providers)
@@ -115,6 +154,7 @@ def build_chain_provider(
     # 1. Specialized providers (most likely to have accurate, e-commerce specific results)
     providers.append(ShopeeSearchProvider())
     providers.append(FeebeeSearchProvider(platforms=platforms))
+    providers.append(FindPriceProvider())
     providers.append(BigGoSearchProvider(platforms=platforms))
     providers.append(LbjSearchProvider(platforms=platforms))
 
