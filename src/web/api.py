@@ -398,6 +398,39 @@ def create_app(project_root: Path | None = None) -> FastAPI:
             
         return RedirectResponse(url=f"{referer}?message={success_msg}#row-{candidate_id}", status_code=303)
 
+    @app.post("/candidates/{candidate_id}/confirm-monitoring")
+    async def confirm_candidate_monitoring(candidate_id: int, request: Request):
+        """Confirm the latest reviewed price and resume scheduled monitoring."""
+        from src.config import load_config, load_env_file
+        from src.services.daily_monitor import DailyMonitorService
+
+        load_env_file(root / ".env")
+        fresh_config = load_config(root / "config.yaml")
+        service = DailyMonitorService(db, fresh_config, root)
+
+        referer = request.headers.get("referer") or "/monitor/results"
+        if "#" in referer:
+            referer = referer.split("#")[0]
+
+        import urllib.parse
+        try:
+            service.confirm_candidate_and_start_monitoring(candidate_id)
+        except Exception as exc:
+            LOGGER.warning("Confirm monitoring failed: %s", exc)
+            error_msg = urllib.parse.quote(f"確認失敗：{exc}")
+            separator = "&" if "?" in referer else "?"
+            return RedirectResponse(
+                url=f"{referer}{separator}error={error_msg}#row-{candidate_id}",
+                status_code=303,
+            )
+
+        success_msg = urllib.parse.quote("已確認商品並開始監控")
+        separator = "&" if "?" in referer else "?"
+        return RedirectResponse(
+            url=f"{referer}{separator}message={success_msg}#row-{candidate_id}",
+            status_code=303,
+        )
+
     @app.post("/candidates/batch_recheck")
     async def batch_recheck_candidates(request: Request):
         form_data = await request.form()

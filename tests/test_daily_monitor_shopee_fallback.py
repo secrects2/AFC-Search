@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -175,3 +176,55 @@ def test_direct_success_does_not_trigger_fallback(tmp_path: Path) -> None:
     service.check_single_candidate(candidate_id)
 
     fallback.assert_not_called()
+
+
+def test_confirm_candidate_records_manual_price_and_resumes_monitoring(tmp_path: Path) -> None:
+    db = Database(tmp_path / "confirm.db")
+    product_id = db.upsert_product("AFC 究極女調", suggested_price=2380)
+    candidate_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://www.tw.coupang.com/products/1",
+        platform="coupang",
+        title="AFC 究極女調 60顆",
+        source_found_by="lbj",
+    )
+    snapshot_id = db.insert_snapshot(
+        candidate_id=candidate_id,
+        product_id=product_id,
+        price=2280,
+        suggested_price=2380,
+        raw_data={"price_source": "lbj"},
+    )
+    db.update_snapshot_final_price(
+        snapshot_id=snapshot_id,
+        final_price=2280,
+        final_price_source="lbj",
+        final_confidence=0.8,
+        final_status="needs_review",
+        decision_reason="備援來源待確認",
+    )
+
+    service = DailyMonitorService(
+        db,
+        AppConfig(request_delay_seconds=0, enable_image_match=False),
+        tmp_path,
+    )
+    service.confirm_candidate_and_start_monitoring(candidate_id)
+
+    candidate = db.list_candidates()[0]
+    assert candidate.status == "suspected_violation"
+    assert candidate.last_price == 2280
+
+    manual = next(obs for obs in db.get_observations(product_id) if obs.source == "manual")
+    manual_audit = json.loads(manual.raw_data)
+    assert manual.price == 2280
+    assert manual_audit["review_action"] == "confirm_and_start_monitoring"
+    assert manual_audit["confirmed_from_source"] == "lbj"
+
+    confirmed_snapshot = next(
+        snapshot
+        for snapshot in db.get_snapshots(limit=500, latest_only=False)
+        if snapshot.final_price_source == "manual"
+    )
+    assert confirmed_snapshot.final_status == "suspected_violation"
+    assert confirmed_snapshot.final_price == 2280

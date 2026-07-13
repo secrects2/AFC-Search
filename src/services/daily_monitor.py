@@ -143,6 +143,115 @@ class DailyMonitorService:
         extraction = self._check_candidate(target, screenshot_dir, dummy_result, force_direct=True)
         return extraction
 
+    def confirm_candidate_and_start_monitoring(self, candidate_id: int) -> None:
+        """Confirm the latest reviewed price and return the candidate to monitoring.
+
+        The current fallback price is recorded as a manual observation so the
+        approval is auditable. The suggested price remains unchanged.
+        """
+        target = next(
+            (candidate for candidate in self.db.list_candidates() if candidate.id == candidate_id),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"Candidate {candidate_id} not found")
+        if target.status == "excluded":
+            raise ValueError("此商品已被排除，無法開始監控")
+
+        latest = next(
+            (snapshot for snapshot in self.db.get_snapshots(limit=500) if snapshot.candidate_id == candidate_id),
+            None,
+        )
+        if latest is None:
+            raise ValueError("找不到可確認的監測結果，請先重新抓取")
+
+        confirmed_price = latest.final_price
+        if confirmed_price is None:
+            confirmed_price = latest.price
+        if confirmed_price is None or confirmed_price <= 0:
+            raise ValueError("目前沒有可確認的價格，請先輸入人工觀測價格")
+
+        product = self.db.get_product(target.product_id)
+        if product is None:
+            raise ValueError("找不到對應的商品資料")
+
+        confirmed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.db.insert_observation(
+            product_id=target.product_id,
+            candidate_id=target.id,
+            platform=target.platform or "manual",
+            source="manual",
+            url=target.url,
+            title=target.title,
+            seller=target.seller,
+            price=float(confirmed_price),
+            match_score=100,
+            confidence=1.0,
+            status="success",
+            error_message="人工確認商品並開始監控",
+            raw_data={
+                "review_action": "confirm_and_start_monitoring",
+                "confirmed_at": confirmed_at,
+                "confirmed_from_snapshot_id": latest.id,
+                "confirmed_from_source": latest.final_price_source,
+                "confirmed_from_status": latest.final_status,
+                "confirmed_url": target.url,
+            },
+        )
+
+        recent_obs = self.db.get_observations_for_decision(target.product_id)
+        candidate_obs = [
+            observation
+            for observation in recent_obs
+            if observation.candidate_id == target.id or observation.source == "manual"
+        ]
+        decision = select_final_price(
+            product_id=target.product_id,
+            observations=candidate_obs,
+            suggested_price=target.suggested_price,
+        )
+        if decision.final_price is None:
+            raise ValueError("人工確認後仍無法決定價格")
+
+        monitor_status = decision.final_status
+        if monitor_status in {"verified_price", "likely_price"}:
+            monitor_status = "normal"
+        elif monitor_status == "needs_review":
+            monitor_status = "price_unknown"
+
+        self.db.update_candidate_status(
+            candidate_id=target.id,
+            status=monitor_status,
+            last_price=decision.final_price,
+        )
+
+        snapshot_id = self.db.insert_snapshot(
+            candidate_id=target.id,
+            product_id=target.product_id,
+            price=decision.final_price,
+            suggested_price=target.suggested_price,
+            is_violation=monitor_status in {"suspected_violation", "verified_violation"},
+            screenshot_path=latest.screenshot_path,
+            raw_data={
+                "review_action": "confirm_and_start_monitoring",
+                "confirmed_at": confirmed_at,
+                "confirmed_from_snapshot_id": latest.id,
+                "decision_reason": decision.decision_reason,
+                "all_prices": decision.all_prices,
+                "price_source": decision.final_price_source,
+                "final_confidence": decision.final_confidence,
+                "final_status": monitor_status,
+            },
+        )
+        self.db.update_snapshot_final_price(
+            snapshot_id=snapshot_id,
+            final_price=decision.final_price,
+            final_price_source=decision.final_price_source,
+            final_confidence=decision.final_confidence,
+            final_status=monitor_status,
+            decision_reason=decision.decision_reason,
+        )
+
     def _mark_candidate_excluded(
         self, candidate: CandidateRow, result: DailyMonitorResult, keyword: str
     ) -> ExtractionResult:

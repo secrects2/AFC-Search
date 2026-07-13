@@ -61,6 +61,12 @@
           {{ item.decision_reason }}
         </td>
         <td>
+          {% if item.final_price is not none or item.price is not none %}
+          <form method="POST" action="/candidates/{{ item.candidate_id }}/confirm-monitoring" style="margin-bottom:6px;"
+                onsubmit="return confirm('確定此商品與價格，並開始監控嗎？')">
+            <button type="submit" class="btn btn-success" style="padding:4px 8px;font-size:12px;">✅ 確認並開始監控</button>
+          </form>
+          {% endif %}
           <form method="POST" action="/manual-review/{{ item.candidate_id }}/price" style="display:flex;gap:4px;align-items:center;">
             <input type="hidden" name="product_id" value="{{ item.product_id }}">
             <input type="number" name="price" placeholder="輸入價格" required style="width:80px;padding:4px;border:1px solid #ccc;border-radius:4px;">
