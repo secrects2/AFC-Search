@@ -24,6 +24,7 @@ from src.services.platform_rate_limiter import PlatformRateLimiter
 from src.services.source_health import SourceHealthTracker
 from src.services.fallback_price_provider import FallbackPriceProvider
 from src.services.final_price import select_final_price
+from src.search.lbj_api import fetch_lbj_query_price
 
 LOGGER = logging.getLogger(__name__)
 
@@ -457,10 +458,26 @@ class DailyMonitorService:
             self.health_tracker.record("direct_html", platform_lower, obs_status)
 
         # Preserve the price shown on the LBJ comparison page as its own
-        # observation. Directly resolving the redirect remains preferred; if
-        # that source is blocked, this price can still be reviewed and compared.
+        # observation. Query.aspx pages are comparison pages, not product
+        # pages, so they must not be parsed by the generic product extractor.
         lbj_price = candidate.last_price
-        if candidate.source_found_by == "lbj":
+        lbj_price_evidence = "candidate stored LBJ price"
+        lbj_query_price_found = False
+        is_lbj_query = (
+            platform_lower == "lbj"
+            and "/bj/query.aspx" in candidate.url.lower()
+        )
+        if is_lbj_query:
+            fetched_lbj_price, fetched_lbj_evidence = fetch_lbj_query_price(
+                candidate.url,
+                timeout=int(self.config.request_timeout_seconds),
+            )
+            if fetched_lbj_price is not None:
+                lbj_price = fetched_lbj_price
+                lbj_price_evidence = fetched_lbj_evidence
+                lbj_query_price_found = True
+
+        if candidate.source_found_by == "lbj" and not lbj_query_price_found:
             try:
                 preserved_price = json.loads(candidate.raw_data or "{}").get("lbj_price")
             except (TypeError, ValueError):
@@ -468,7 +485,7 @@ class DailyMonitorService:
             if isinstance(preserved_price, (int, float)):
                 lbj_price = float(preserved_price)
 
-        if candidate.source_found_by == "lbj" and lbj_price is not None:
+        if (candidate.source_found_by == "lbj" or is_lbj_query) and lbj_price is not None:
             self.db.insert_observation(
                 product_id=candidate.product_id,
                 candidate_id=candidate.id,
@@ -482,9 +499,10 @@ class DailyMonitorService:
                 confidence=0.75,
                 status="success",
                 raw_data={
-                    "source": "lbj_search",
+                    "source": "lbj_query" if is_lbj_query else "lbj_search",
                     "price_is_from_discovery": True,
                     "discovery_price": lbj_price,
+                    "price_evidence": lbj_price_evidence,
                 },
             )
             self.health_tracker.record("lbj", platform_lower, "success")
@@ -495,7 +513,7 @@ class DailyMonitorService:
         # A successful direct price is authoritative enough for this run. The
         # search chain is reserved for blocked pages, missing/invalid prices,
         # skipped direct crawls, and other direct extraction failures.
-        direct_failed = (
+        direct_failed = not lbj_query_price_found and (
             skip_direct
             or direct_extraction is None
             or direct_extraction.parse_status != "ok"

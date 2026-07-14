@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -15,6 +16,16 @@ from src.search.base import BaseSearchProvider, SearchResult
 LOGGER = logging.getLogger(__name__)
 
 LBJ_BASE = "https://www.lbj.tw/BJ"
+
+_LBJ_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+}
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,65 @@ def parse_lbj_html(
     return listings
 
 
+def _find_aggregate_low_price(value: object) -> float | None:
+    if isinstance(value, dict):
+        offers = value.get("offers")
+        if isinstance(offers, dict) and "lowPrice" in offers:
+            price = parse_price_value(offers.get("lowPrice"))
+            if price is not None and price > 0:
+                return price
+        if "lowPrice" in value:
+            price = parse_price_value(value.get("lowPrice"))
+            if price is not None and price > 0:
+                return price
+        for nested in value.values():
+            price = _find_aggregate_low_price(nested)
+            if price is not None:
+                return price
+    elif isinstance(value, list):
+        for nested in value:
+            price = _find_aggregate_low_price(nested)
+            if price is not None:
+                return price
+    return None
+
+
+def parse_lbj_query_price(html: str, query_url: str = "") -> tuple[float | None, str]:
+    """Read the aggregate price shown by an LBJ comparison query page."""
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            payload = json.loads(script.get_text(strip=True))
+        except (TypeError, ValueError):
+            continue
+        price = _find_aggregate_low_price(payload)
+        if price is not None:
+            return price, "lbj JSON-LD AggregateOffer.lowPrice"
+
+    listings = parse_lbj_html(html, query_url, max_results=100)
+    prices = [listing.price for listing in listings if listing.price is not None]
+    if prices:
+        return min(prices), "lbj comparison data-price"
+    return None, ""
+
+
+def _fetch_lbj_html(url: str, timeout: int) -> str:
+    response = requests.get(url, headers=_LBJ_HEADERS, timeout=timeout)
+    response.raise_for_status()
+    response.encoding = response.encoding or "utf-8"
+    return response.text
+
+
+def fetch_lbj_query_price(query_url: str, timeout: int = 15) -> tuple[float | None, str]:
+    """Fetch and parse one LBJ Query.aspx comparison page."""
+    try:
+        html = _fetch_lbj_html(query_url, timeout)
+        return parse_lbj_query_price(html, query_url)
+    except Exception as exc:
+        LOGGER.warning("LBJ query page failed: %s", exc)
+        return None, str(exc)
+
+
 def search_lbj_listings(
     keyword: str,
     max_results: int = 20,
@@ -103,21 +173,7 @@ def search_lbj_listings(
     url = f"{LBJ_BASE}/Query.aspx?k={urllib.parse.quote(keyword)}"
     
     try:
-        response = requests.get(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
-            },
-            timeout=timeout
-        )
-        response.raise_for_status()
-        html = response.text
+        html = _fetch_lbj_html(url, timeout)
     except Exception as exc:
         LOGGER.warning("LBJ search failed for keyword '%s': %s", keyword, exc)
         return []
