@@ -185,6 +185,52 @@ main {
   margin-bottom: 18px;
 }
 
+.schedule-panel {
+  margin-bottom: 18px;
+}
+
+.schedule-head {
+  margin-bottom: 12px;
+}
+
+.schedule-intro {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.schedule-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.schedule-item {
+  padding: 14px 16px 2px 0;
+}
+
+.schedule-item + .schedule-item {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.schedule-time {
+  display: block;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.schedule-item h3 {
+  margin: 6px 0 5px;
+  font-size: 16px;
+}
+
+.schedule-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .section-head h2 {
   margin: 0;
   font-size: 18px;
@@ -520,6 +566,22 @@ select {
   
   .panel {
     overflow-x: auto;
+  }
+
+  .schedule-list {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-item {
+    padding-right: 0;
+  }
+
+  .schedule-item + .schedule-item {
+    padding-top: 14px;
+    padding-left: 0;
+    margin-top: 14px;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
   
   .desktop-only {
