@@ -316,6 +316,7 @@ class Database:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT DEFAULT ''")
             self._migrate_candidate_source_constraint(conn)
             self._migrate_candidate_takedown_status(conn)
+            self._migrate_takedown_to_excluded(conn)
             self._migrate_snapshot_final_price(conn)
             self._migrate_candidate_multi_source(conn)
             conn.commit()
@@ -444,6 +445,18 @@ class Database:
             """
         )
         conn.execute("PRAGMA foreign_keys=ON")
+
+    def _migrate_takedown_to_excluded(self, conn: sqlite3.Connection) -> None:
+        """Treat legacy cancellation records as excluded monitoring links."""
+        cur = conn.execute(
+            "UPDATE product_candidates SET status='excluded' "
+            "WHERE status='takedown_notified'"
+        )
+        if cur.rowcount:
+            LOGGER.info(
+                "Migrated %d legacy cancelled candidates to excluded",
+                cur.rowcount,
+            )
 
     # -- Products -----------------------------------------------------------
 
@@ -1021,6 +1034,10 @@ class Database:
             )
             takedown_notified = cur.fetchone()["c"]
             cur.execute(
+                "SELECT COUNT(*) AS c FROM product_candidates WHERE status='excluded'"
+            )
+            excluded_candidates = cur.fetchone()["c"]
+            cur.execute(
                 "SELECT MAX(checked_at) AS last FROM price_snapshots"
             )
             last_row = cur.fetchone()
@@ -1032,6 +1049,7 @@ class Database:
                 "price_unknown": price_unknown,
                 "needs_review": needs_review,
                 "takedown_notified": takedown_notified,
+                "excluded_candidates": excluded_candidates,
                 "last_check_time": last_check or "",
             }
 

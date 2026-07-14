@@ -24,7 +24,7 @@
   <div style="margin-bottom: 16px;">
     <strong>過濾狀態：</strong>
     <a href="/candidates" style="margin-right:8px; font-weight: {{ 'bold' if not request.query_params.get('status') else 'normal' }}">全部有效</a>
-    <a href="/candidates?status=excluded" style="margin-right:8px; font-weight: {{ 'bold' if request.query_params.get('status') == 'excluded' else 'normal' }}">被排除 (Excluded)</a>
+    <a href="/candidates?status=excluded" style="margin-right:8px; font-weight: {{ 'bold' if request.query_params.get('status') == 'excluded' else 'normal' }}">已刪除監控</a>
     <a href="/candidates?status=suspected_violation" style="margin-right:8px; font-weight: {{ 'bold' if request.query_params.get('status') == 'suspected_violation' else 'normal' }}">疑似破價</a>
   </div>
   
@@ -70,12 +70,7 @@
           <form method="post" action="/candidates/{{ c.id }}/recheck" style="display:inline" onsubmit="var btn = this.querySelector('button'); btn.disabled = true; btn.innerText = '處理中...'; this.closest('tr').style.backgroundColor = '#fff3cd';">
             <button type="submit" class="small">重查</button>
           </form>
-          {% if c.status == 'suspected_violation' %}
-            <form method="post" action="/candidates/{{ c.id }}/takedown" style="display:inline"
-                  onsubmit="return confirm('確定取消監控？')">
-              <button type="submit" class="small" style="background:#e65100;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;" title="取消監控">❌</button>
-            </form>
-          {% elif c.status == 'takedown_notified' %}
+          {% if c.status == 'takedown_notified' %}
             <form method="post" action="/candidates/{{ c.id }}/restore_violation" style="display:inline"
                   onsubmit="return confirm('確定恢復監控？')">
               <button type="submit" class="small" style="background:#2e7d32;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;" title="恢復監控">✅</button>
@@ -85,9 +80,9 @@
           <form method="post" action="/candidates/{{ c.id }}/restore" style="display:inline">
             <button type="submit" class="small" style="background:#2e7d32;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">恢復</button>
           </form>
-          {% else %}
-          <form method="post" action="/candidates/{{ c.id }}/disable" style="display:inline" onsubmit="return confirm('確定要將此網址排除，不再監控嗎？')">
-            <button type="submit" class="small danger">不再監控</button>
+          {% elif c.status != 'takedown_notified' %}
+          <form method="post" action="/candidates/{{ c.id }}/disable" style="display:inline" onsubmit="return confirm('確定刪除監控嗎？後續排程將停止，但歷史紀錄會保留。')">
+            <button type="submit" class="small danger" title="刪除監控並保留歷史紀錄">🗑️ 刪除監控</button>
           </form>
           {% endif %}
         </td>

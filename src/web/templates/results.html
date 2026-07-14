@@ -14,7 +14,6 @@
   <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
     <a class="button {{ 'primary' if not filter_status else '' }}" href="/monitor/results">全部</a>
     <a class="button {{ 'primary' if filter_status == 'suspected_violation' else '' }}" href="/monitor/results?status=suspected_violation">監控中</a>
-    <a class="button {{ 'primary' if filter_status == 'takedown_notified' else '' }}" href="/monitor/results?status=takedown_notified">取消監控</a>
     <a class="button {{ 'primary' if filter_status == 'needs_review' else '' }}" href="/monitor/results?status=needs_review">待人工確認</a>
     <a class="button {{ 'primary' if filter_status == 'price_unknown' else '' }}" href="/monitor/results?status=price_unknown">未抓到價格</a>
     <a class="button {{ 'primary' if filter_status == 'error' else '' }}" href="/monitor/results?status=error">錯誤</a>
@@ -73,16 +72,10 @@
                 </button>
               </form>
             {% endif %}
-            <form method="post" action="/candidates/{{ s.candidate_id }}/takedown" style="display:inline"
-                  onsubmit="return confirm('確定取消對此網址的監控嗎？')">
-              <button type="submit" class="small" style="background:#e65100;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="標記為已處理 / 取消監控">
-                ❌ 取消監控
-              </button>
-            </form>
             <form method="post" action="/candidates/{{ s.candidate_id }}/disable" style="display:inline"
-                  onsubmit="return confirm('確定要從系統中刪除並忽略此網址嗎？')">
-              <button type="submit" class="small" style="background:#dc3545;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="永久刪除/忽略此商品">
-                🗑️ 刪除
+                  onsubmit="return confirm('確定刪除監控嗎？後續排程將停止，但歷史紀錄會保留。')">
+              <button type="submit" class="small" style="background:#dc3545;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;" title="刪除監控並保留歷史紀錄">
+                🗑️ 刪除監控
               </button>
             </form>
           {% else %}

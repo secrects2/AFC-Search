@@ -58,7 +58,8 @@ def status_label(status: str) -> str:
         "price_unknown": "未抓到價格",
         "error": "錯誤",
         "blocked": "遭到阻擋",
-        "takedown_notified": "取消監控",
+        "excluded": "已刪除監控",
+        "takedown_notified": "已停止監控",
     }
     label = mapping.get(status, status) if status else ""
     color = "#333"
@@ -459,8 +460,8 @@ def create_app(project_root: Path | None = None) -> FastAPI:
 
     @app.post("/candidates/{candidate_id}/takedown")
     async def mark_takedown_notified(candidate_id: int, request: Request):
-        """Mark a candidate as 'takedown notified'."""
-        db.update_candidate_status(candidate_id, "takedown_notified")
+        """Legacy alias: stopping monitoring uses the same soft-delete action."""
+        db.disable_candidate(candidate_id)
         referer = request.headers.get("referer") or "/monitor/results"
         if "#" in referer: referer = referer.split("#")[0]
         return RedirectResponse(url=f"{referer}#row-{candidate_id}", status_code=303)
