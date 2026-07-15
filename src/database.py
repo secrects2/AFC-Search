@@ -420,6 +420,7 @@ class Database:
             return
 
         LOGGER.info("Migrating product_candidates source_found_by constraint")
+        conn.commit()
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("CREATE TEMP TABLE product_candidates_backup AS SELECT * FROM product_candidates")
         conn.execute("DROP TABLE product_candidates")
@@ -487,6 +488,7 @@ class Database:
             return
 
         LOGGER.info("Migrating product_candidates: adding takedown_notified status")
+        conn.commit()
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("CREATE TEMP TABLE _pc_backup AS SELECT * FROM product_candidates")
         conn.execute("DROP TABLE product_candidates")
@@ -1337,6 +1339,7 @@ class Database:
             return
 
         LOGGER.info("Migration: expanding product_candidates for multi-source support")
+        conn.commit()
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("CREATE TEMP TABLE _pc_ms_backup AS SELECT * FROM product_candidates")
         conn.execute("DROP TABLE product_candidates")
