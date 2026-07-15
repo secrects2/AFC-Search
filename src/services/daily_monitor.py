@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import AppConfig, load_config
-from src.database import Database, CandidateRow
+from src.database import Database, CandidateRow, is_coupon_source
 from src.extractors import ProductPageExtractor, ExtractionResult
 from src.services.platform_rate_limiter import PlatformRateLimiter
 from src.services.source_health import SourceHealthTracker
@@ -118,6 +118,7 @@ class DailyMonitorService:
                 )
                 result.errors += 1
 
+        self.db.deduplicate_candidates_by_final_url(product_id)
         self.health_tracker.auto_cooldown_rules()
 
         result.total_checked = total
@@ -143,6 +144,7 @@ class DailyMonitorService:
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         dummy_result = DailyMonitorResult()
         extraction = self._check_candidate(target, screenshot_dir, dummy_result, force_direct=True)
+        self.db.deduplicate_candidates_by_final_url(target.product_id)
         return extraction
 
     def confirm_candidate_and_start_monitoring(self, candidate_id: int) -> None:
@@ -263,11 +265,14 @@ class DailyMonitorService:
         evidence: dict[str, Any] | None = None,
     ) -> ExtractionResult:
         raw_data = evidence or {}
-        error_message = (
-            f"Excluded by image rule: {keyword}"
-            if extraction is not None
-            else f"Excluded by keyword: {keyword}"
-        )
+        if keyword == "source_coupon":
+            error_message = "Excluded by source: coupon"
+        elif keyword == "duplicate_final_product_page":
+            error_message = "Excluded by duplicate final product page"
+        elif extraction is not None:
+            error_message = f"Excluded by image rule: {keyword}"
+        else:
+            error_message = f"Excluded by keyword: {keyword}"
         self.db.update_candidate_status(candidate.id, "excluded")
         self.db.insert_snapshot(
             candidate_id=candidate.id,
@@ -320,6 +325,27 @@ class DailyMonitorService:
             candidate.product_name,
             candidate.url[:80],
         )
+
+        if is_coupon_source(candidate.source_found_by):
+            evidence = {
+                "source_found_by": candidate.source_found_by,
+                "exclusion_reason": "source_coupon",
+            }
+            coupon_extraction = ExtractionResult(
+                title=candidate.title,
+                price=candidate.last_price,
+                seller=candidate.seller,
+                platform=platform,
+                raw_data=evidence,
+                parse_status="excluded",
+            )
+            return self._mark_candidate_excluded(
+                candidate,
+                result,
+                "source_coupon",
+                extraction=coupon_extraction,
+                evidence=evidence,
+            )
 
         exclusion_keyword = self.db.find_matching_global_exclusion(candidate)
         if exclusion_keyword:
@@ -423,6 +449,12 @@ class DailyMonitorService:
                 platform=platform_lower,
                 screenshot_dir=screenshot_dir,
             )
+            final_url = str(direct_extraction.raw_data.get("final_url") or "").strip()
+            if final_url:
+                self.db.merge_candidate_raw_data(
+                    candidate.id,
+                    {"final_url": final_url},
+                )
 
             if platform_lower == "momo" and self.config.enable_ocr:
                 image_scan = scan_image_urls_for_text(
@@ -577,6 +609,30 @@ class DailyMonitorService:
             )
 
             if fallback_obs:
+                if is_coupon_source(fallback_obs.get("source")):
+                    coupon_raw_data = dict(fallback_obs.get("raw_data") or {})
+                    coupon_raw_data.update(
+                        {
+                            "source": fallback_obs.get("source", ""),
+                            "exclusion_reason": "source_coupon",
+                        }
+                    )
+                    coupon_extraction = ExtractionResult(
+                        title=fallback_obs.get("title", ""),
+                        price=fallback_obs.get("price"),
+                        seller=fallback_obs.get("seller", ""),
+                        platform=fallback_obs.get("platform", platform_lower),
+                        raw_data=coupon_raw_data,
+                        parse_status="excluded",
+                    )
+                    return self._mark_candidate_excluded(
+                        candidate,
+                        result,
+                        "source_coupon",
+                        extraction=coupon_extraction,
+                        evidence=coupon_raw_data,
+                    )
+
                 fallback_raw_data = dict(fallback_obs.get("raw_data") or {})
                 fallback_raw_data.update({
                     "fallback_trigger": "direct_price_unavailable",

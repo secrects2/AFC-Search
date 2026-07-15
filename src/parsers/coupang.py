@@ -73,6 +73,7 @@ class CoupangParser(GenericParser):
                         raw_data={
                             "price_source": "coupang_rendered_dom",
                             "rendered_url": page.url,
+                            "final_url": page.url,
                         },
                     )
                 finally:

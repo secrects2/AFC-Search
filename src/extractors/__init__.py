@@ -50,6 +50,12 @@ class ProductPageExtractor:
             output = parser.parse(url, output_dir)
             merged_raw_data = {"evidence_text": output.evidence_text, "ocr_status": output.ocr_status}
             merged_raw_data.update(output.raw_data)
+            merged_raw_data["final_url"] = str(
+                merged_raw_data.get("final_url")
+                or merged_raw_data.get("rendered_url")
+                or getattr(parser, "last_fetched_url", "")
+                or url
+            )
             
             return ExtractionResult(
                 title=output.title,

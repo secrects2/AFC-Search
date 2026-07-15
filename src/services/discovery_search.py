@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from src.config import AppConfig, load_config
-from src.database import Database
+from src.database import Database, is_coupon_source
 from src.image_text import ImageTextScanResult, scan_image_urls_for_text
 from src.parsers import get_parser
 from src.search.serp_api import detect_platform
@@ -174,14 +174,37 @@ class DiscoverySearchService:
             detected_platform = detect_platform(sr.url)
             platform = sr.platform if sr.platform not in {"", "manual", "other"} else detected_platform
             raw_data = dict(sr.raw_data or {})
+            source_found_by = sr.source or "serpapi"
+            coupon_source = any(
+                is_coupon_source(value)
+                for value in (
+                    source_found_by,
+                    sr.platform,
+                    raw_data.get("source"),
+                    raw_data.get("provider"),
+                )
+            )
+            if coupon_source:
+                source_found_by = "coupon"
+                raw_data.update(
+                    {
+                        "exclusion_reason": "source_coupon",
+                        "coupon_source": sr.source or sr.platform,
+                    }
+                )
             image_scan: ImageTextScanResult | None = None
-            if platform.lower() == "momo":
+            if platform.lower() == "momo" and not coupon_source:
                 image_scan = self._scan_momo_official_image(sr.url)
                 raw_data.update(image_scan.as_raw_data())
 
             # --- Global Exclusions ---
-            is_excluded = any(ex.lower() in result_title_lower for ex in global_exclusions)
+            is_excluded = coupon_source or any(ex.lower() in result_title_lower for ex in global_exclusions)
             status = "excluded" if is_excluded else "active"
+            if coupon_source:
+                LOGGER.info(
+                    "Excluding coupon-source result: [%s] %s",
+                    sr.product_name[:40], sr.url[:60],
+                )
             if is_excluded:
                 LOGGER.info(
                     "全域挑除關鍵字過濾: [%s] → %s",
@@ -201,7 +224,7 @@ class DiscoverySearchService:
                 platform=platform,
                 title=sr.product_name,
                 seller=sr.seller,
-                source_found_by=sr.source or "serpapi",
+                source_found_by=source_found_by,
                 status=status,
                 last_price=sr.found_price,
                 raw_data=raw_data or None,

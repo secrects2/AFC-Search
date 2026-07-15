@@ -39,6 +39,7 @@ class BaseParser:
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self.last_fetched_url = ""
 
     def parse(self, url: str, output_dir: Path) -> ParserOutput:
         raise NotImplementedError
@@ -46,6 +47,7 @@ class BaseParser:
     def fetch_page(self, url: str, platform: str = "") -> str:
         local_text = self._read_local_file(url)
         if local_text is not None:
+            self.last_fetched_url = url
             return local_text
 
         headers = {
@@ -88,6 +90,7 @@ class BaseParser:
                     raise PermissionError(f"page_blocked: HTTP {response.status_code}")
                 response.raise_for_status()
                 response.encoding = response.encoding or "utf-8"
+                self.last_fetched_url = response.url or url
                 return response.text
             except PermissionError as exc:
                 last_error = exc
@@ -115,6 +118,7 @@ class BaseParser:
             try:
                 from src.scraper_api import fetch_via_scraperapi
                 LOGGER.info("Direct fetch blocked, trying ScraperAPI: %s", url[:60])
+                self.last_fetched_url = url
                 return fetch_via_scraperapi(url, scraperapi_key, timeout=30)
             except Exception as scraper_exc:
                 LOGGER.warning("ScraperAPI fallback also failed: %s", scraper_exc)

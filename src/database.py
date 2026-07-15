@@ -8,13 +8,101 @@ from __future__ import annotations
 import json
 import sqlite3
 import logging
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger(__name__)
+
+
+_TRACKING_QUERY_KEYS = {
+    "af_c_id",
+    "af_reengagement_window",
+    "af_siteid",
+    "af_sub5",
+    "campaignid",
+    "ctag",
+    "dclid",
+    "ecid",
+    "fbclid",
+    "gclid",
+    "impressionid",
+    "is_retargeting",
+    "link_click_id",
+    "lptag",
+    "mcid",
+    "msclkid",
+    "network",
+    "pageType",
+    "pageValue",
+    "pid",
+    "puid",
+    "redirect",
+    "spec",
+    "src",
+    "subid",
+    "subparam",
+    "traceid",
+    "trafficType",
+    "utm_campaign",
+    "utm_content",
+    "utm_medium",
+    "utm_source",
+    "utm_term",
+    "vtm_channel",
+    "vtm_stat_id",
+    "wpcid",
+    "wref",
+    "wtime",
+}
+_TRACKING_QUERY_PREFIXES = ("af_", "utm_", "vtm_")
+_TRACKING_QUERY_KEYS_LOWER = {item.casefold() for item in _TRACKING_QUERY_KEYS}
+
+
+def is_coupon_source(value: object) -> bool:
+    """Return True when a provider/source label identifies coupon traffic."""
+    return "coupon" in str(value or "").strip().casefold()
+
+
+def canonical_final_url(url: str) -> str:
+    """Normalize a resolved product URL for duplicate detection."""
+    value = str(url or "").strip()
+    if not value:
+        return ""
+
+    parsed = urlsplit(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value
+
+    # Keep one stable identity for Shopee SEO URLs.
+    if "shopee.tw" in parsed.netloc.lower():
+        match = re.search(r"-i\.(\d+)\.(\d+)", parsed.path)
+        if match:
+            return f"https://shopee.tw/product/{match.group(1)}/{match.group(2)}"
+
+    query: list[tuple[str, str]] = []
+    for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
+        key_lower = key.casefold()
+        if key_lower in _TRACKING_QUERY_KEYS_LOWER:
+            continue
+        if any(key_lower.startswith(prefix) for prefix in _TRACKING_QUERY_PREFIXES):
+            continue
+        query.append((key, query_value))
+
+    normalized_path = parsed.path.rstrip("/") or "/"
+    return urlunsplit(
+        (
+            parsed.scheme.casefold(),
+            parsed.netloc.casefold(),
+            normalized_path,
+            urlencode(sorted(query)),
+            "",
+        )
+    )
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS products (
@@ -51,7 +139,7 @@ CREATE TABLE IF NOT EXISTS product_candidates (
     source_found_by TEXT DEFAULT 'manual'
         CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                    'crawler','mcp','findprice','shopee',
-                                   'findprice_shopee','feebee','biggo','lbj','fallback')),
+                                   'findprice_shopee','feebee','biggo','lbj','fallback','coupon')),
     raw_data TEXT DEFAULT '{}'
 );
 
@@ -319,6 +407,7 @@ class Database:
             self._migrate_takedown_to_excluded(conn)
             self._migrate_snapshot_final_price(conn)
             self._migrate_candidate_multi_source(conn)
+            self._migrate_coupon_source_candidates(conn)
             conn.commit()
         finally:
             conn.close()
@@ -355,7 +444,7 @@ class Database:
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
                                                'findprice_shopee','feebee','biggo',
-                                               'lbj','fallback')),
+                                               'lbj','fallback','coupon')),
                 raw_data TEXT DEFAULT '{}'
             )
             """
@@ -371,7 +460,7 @@ class Database:
                        WHEN source_found_by IN (
                            'manual','serper','serpapi','brave','crawler','mcp',
                            'findprice','shopee','findprice_shopee','feebee','biggo',
-                           'lbj','fallback'
+                           'lbj','fallback','coupon'
                        )
                        THEN source_found_by
                        ELSE 'crawler'
@@ -422,7 +511,7 @@ class Database:
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
                                                'findprice_shopee','feebee','biggo',
-                                               'lbj','fallback')),
+                                               'lbj','fallback','coupon')),
                 raw_data TEXT DEFAULT '{}'
             )
             """
@@ -457,6 +546,49 @@ class Database:
                 "Migrated %d legacy cancelled candidates to excluded",
                 cur.rowcount,
             )
+
+    def _migrate_coupon_source_candidates(self, conn: sqlite3.Connection) -> None:
+        """Exclude existing candidates discovered through coupon sources."""
+        rows = conn.execute(
+            """
+            SELECT id, source_found_by, raw_data, status
+            FROM product_candidates
+            WHERE status != 'excluded'
+            """
+        ).fetchall()
+        migrated = 0
+        for row in rows:
+            try:
+                raw_data = json.loads(row["raw_data"] or "{}")
+            except (TypeError, ValueError):
+                raw_data = {}
+            if not isinstance(raw_data, dict):
+                raw_data = {}
+
+            source_values = (
+                row["source_found_by"],
+                raw_data.get("source"),
+                raw_data.get("provider"),
+                raw_data.get("source_found_by"),
+            )
+            if not any(is_coupon_source(value) for value in source_values):
+                continue
+
+            raw_data["exclusion_reason"] = "source_coupon"
+            raw_data["coupon_source_excluded"] = True
+            conn.execute(
+                """
+                UPDATE product_candidates
+                SET status='excluded', source_found_by='coupon',
+                    last_checked_at=?, raw_data=?
+                WHERE id=?
+                """,
+                (_now_iso(), json.dumps(raw_data, ensure_ascii=False), row["id"]),
+            )
+            migrated += 1
+
+        if migrated:
+            LOGGER.info("Excluded %d existing coupon-source candidates", migrated)
 
     # -- Products -----------------------------------------------------------
 
@@ -574,6 +706,23 @@ class Database:
         raw_data: dict[str, Any] | None = None,
     ) -> int:
         """Insert or update a candidate by URL. Returns candidate id."""
+        incoming_raw_data = dict(raw_data or {}) if raw_data is not None else None
+        coupon_source = is_coupon_source(source_found_by)
+        if incoming_raw_data is not None:
+            coupon_source = coupon_source or any(
+                is_coupon_source(incoming_raw_data.get(key))
+                for key in ("source", "provider", "source_found_by")
+            )
+        if coupon_source:
+            source_found_by = "coupon"
+            status = "excluded"
+            raw_data = incoming_raw_data or {}
+            raw_data.update(
+                {
+                    "exclusion_reason": "source_coupon",
+                    "coupon_source_excluded": True,
+                }
+            )
         raw_json = json.dumps(raw_data, ensure_ascii=False) if raw_data is not None else None
         with self._cursor() as (conn, cur):
             cur.execute(
@@ -586,6 +735,9 @@ class Database:
                     "seller=?", "source_found_by=?",
                 ]
                 params: list[Any] = [product_id, platform, title, seller, source_found_by]
+                if coupon_source:
+                    updates.append("status=?")
+                    params.append("excluded")
                 if last_price is not None:
                     updates.append("last_price=?")
                     params.append(last_price)
@@ -621,6 +773,107 @@ class Database:
                     params,
                 )
             return candidate_id  # type: ignore[return-value]
+
+    def merge_candidate_raw_data(
+        self,
+        candidate_id: int,
+        values: dict[str, Any],
+    ) -> None:
+        """Merge audit fields into a candidate without replacing existing evidence."""
+        if not values:
+            return
+        with self._cursor() as (conn, cur):
+            row = cur.execute(
+                "SELECT raw_data FROM product_candidates WHERE id=?",
+                (candidate_id,),
+            ).fetchone()
+            if not row:
+                return
+            try:
+                raw_data = json.loads(row["raw_data"] or "{}")
+            except (TypeError, ValueError):
+                raw_data = {}
+            if not isinstance(raw_data, dict):
+                raw_data = {}
+            raw_data.update(values)
+            cur.execute(
+                "UPDATE product_candidates SET raw_data=? WHERE id=?",
+                (json.dumps(raw_data, ensure_ascii=False), candidate_id),
+            )
+
+    def deduplicate_candidates_by_final_url(self, product_id: int | None = None) -> int:
+        """Exclude later candidates that resolved to the same product page."""
+        with self._cursor() as (conn, cur):
+            sql = """
+                SELECT id, product_id, first_seen_at, status, raw_data
+                FROM product_candidates
+                WHERE status != 'excluded'
+            """
+            params: list[Any] = []
+            if product_id is not None:
+                sql += " AND product_id=?"
+                params.append(product_id)
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+            groups: dict[tuple[int, str], list[sqlite3.Row]] = {}
+            for row in rows:
+                try:
+                    raw_data = json.loads(row["raw_data"] or "{}")
+                except (TypeError, ValueError):
+                    raw_data = {}
+                if not isinstance(raw_data, dict):
+                    continue
+                final_url = canonical_final_url(raw_data.get("final_url", ""))
+                if not final_url:
+                    continue
+                groups.setdefault((int(row["product_id"]), final_url), []).append(row)
+
+            excluded_count = 0
+            for (group_product_id, final_url), group in groups.items():
+                if len(group) < 2:
+                    continue
+                ordered = sorted(
+                    group,
+                    key=lambda row: (row["first_seen_at"] or "9999-12-31", int(row["id"])),
+                )
+                keeper = ordered[0]
+                for duplicate in ordered[1:]:
+                    try:
+                        raw_data = json.loads(duplicate["raw_data"] or "{}")
+                    except (TypeError, ValueError):
+                        raw_data = {}
+                    if not isinstance(raw_data, dict):
+                        raw_data = {}
+                    raw_data.update(
+                        {
+                            "exclusion_reason": "duplicate_final_product_page",
+                            "duplicate_final_url": final_url,
+                            "duplicate_of_candidate_id": int(keeper["id"]),
+                            "original_status_before_exclusion": duplicate["status"],
+                        }
+                    )
+                    cur.execute(
+                        """
+                        UPDATE product_candidates
+                        SET status='excluded', last_checked_at=?, raw_data=?
+                        WHERE id=? AND product_id=? AND status != 'excluded'
+                        """,
+                        (
+                            _now_iso(),
+                            json.dumps(raw_data, ensure_ascii=False),
+                            duplicate["id"],
+                            group_product_id,
+                        ),
+                    )
+                    excluded_count += cur.rowcount
+
+            if excluded_count:
+                LOGGER.info(
+                    "Excluded %d duplicate candidates by final product URL",
+                    excluded_count,
+                )
+            return excluded_count
 
     def get_active_candidates(self, product_id: int | None = None) -> list[CandidateRow]:
         """Get candidates with status in (active, normal, suspected_violation, price_unknown)."""
@@ -1080,7 +1333,7 @@ class Database:
             return
         schema_sql = row["sql"] or ""
         # Already migrated only when all current multi-source values exist.
-        if all(value in schema_sql for value in ("source_dead", "feebee", "biggo", "lbj", "fallback")):
+        if all(value in schema_sql for value in ("source_dead", "feebee", "biggo", "lbj", "fallback", "coupon")):
             return
 
         LOGGER.info("Migration: expanding product_candidates for multi-source support")
@@ -1108,7 +1361,7 @@ class Database:
                     CHECK(source_found_by IN ('manual','serper','serpapi','brave',
                                                'crawler','mcp','findprice','shopee',
                                                'findprice_shopee','feebee','biggo',
-                                               'lbj','fallback')),
+                                               'lbj','fallback','coupon')),
                 raw_data TEXT DEFAULT '{}',
                 UNIQUE(product_id, url)
             )

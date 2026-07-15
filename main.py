@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import load_config
+from src.database import is_coupon_source
 from src.image_text import scan_image_urls_for_text
 from src.image_matcher import best_image_match
 from src.loader import Product, read_products
@@ -191,6 +192,17 @@ def run(argv: list[str] | None = None) -> int:
                 continue
 
             for link in all_links:
+                if any(
+                    is_coupon_source(value)
+                    for value in (
+                        link.source,
+                        link.platform,
+                        link.raw_data.get("source"),
+                        link.raw_data.get("provider"),
+                    )
+                ):
+                    LOGGER.info("Skipping coupon-source result: %s", link.url[:100])
+                    continue
                 parser = get_parser(link.platform, link.url, config)
                 output = parser.parse(link.url, run_output_dir)
                 title_for_match = output.title or link.product_name

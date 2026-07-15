@@ -52,6 +52,7 @@ class GenericParser(BaseParser):
             image_urls=image_urls,
         )
         output.raw_data["price_source"] = evidence if price is not None else "unknown"
+        output.raw_data["final_url"] = self.last_fetched_url or url
 
         if price is None and (self.config.enable_screenshot or self.config.enable_ocr):
             if "findprice.com.tw/go/" in url:

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from src.config import AppConfig
-from src.database import Database
+from src.database import Database, canonical_final_url
 from src.extractors import ExtractionResult
 from src.image_text import ImageTextScanResult, normalize_image_text, scan_image_urls_for_text
 from src.search.base import SearchResult
@@ -125,3 +125,57 @@ def test_discovery_stores_momo_official_image_as_excluded(
     candidate = db.list_candidates()[0]
     assert candidate.status == "excluded"
     assert '"exclusion_reason": "MOMO 圖片含官方字樣"' in candidate.raw_data
+
+
+def test_coupon_source_is_excluded_on_upsert(tmp_path: Path) -> None:
+    db = Database(tmp_path / "price_monitor.db")
+    product_id = db.upsert_product("AFC product", suggested_price=1000)
+
+    candidate_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://coupon.example.com/product/1",
+        platform="momo",
+        title="AFC product",
+        source_found_by="coupon_search",
+    )
+
+    candidate = db.list_candidates(status="excluded")[0]
+    assert candidate.id == candidate_id
+    assert candidate.source_found_by == "coupon"
+    assert '"exclusion_reason": "source_coupon"' in candidate.raw_data
+
+
+def test_deduplicate_candidates_by_final_url_keeps_earliest(tmp_path: Path) -> None:
+    db = Database(tmp_path / "price_monitor.db")
+    product_id = db.upsert_product("AFC product", suggested_price=1000)
+    first_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://feebee.example.com/redirect/1",
+        platform="momo",
+        title="AFC product",
+        source_found_by="feebee",
+    )
+    second_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://biggo.example.com/redirect/2",
+        platform="momo",
+        title="AFC product",
+        source_found_by="biggo",
+    )
+    db.merge_candidate_raw_data(
+        first_id,
+        {"final_url": "https://shop.example.com/product/1?utm_source=feebee"},
+    )
+    db.merge_candidate_raw_data(
+        second_id,
+        {"final_url": "https://shop.example.com/product/1?utm_source=biggo"},
+    )
+
+    assert canonical_final_url(
+        "https://shop.example.com/product/1?utm_source=feebee"
+    ) == "https://shop.example.com/product/1"
+    assert db.deduplicate_candidates_by_final_url(product_id) == 1
+    candidates = {candidate.id: candidate for candidate in db.list_candidates()}
+    assert candidates[first_id].status == "active"
+    assert candidates[second_id].status == "excluded"
+    assert '"duplicate_of_candidate_id": %d' % first_id in candidates[second_id].raw_data

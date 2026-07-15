@@ -87,6 +87,9 @@ class ShopeeParser(BaseParser):
         if result.error_message:
             evidence_parts.append(result.error_message)
 
+        raw_data = dict(result.raw_data or {})
+        raw_data.setdefault("final_url", result.url or "")
+
         return ParserOutput(
             platform="shopee",
             url=result.url,
@@ -96,4 +99,5 @@ class ShopeeParser(BaseParser):
             raw_text=f"shop_id={result.shop_id} item_id={result.item_id}",
             parse_status=parse_status,
             evidence_text=" | ".join(evidence_parts),
+            raw_data=raw_data,
         )
