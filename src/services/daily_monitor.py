@@ -25,6 +25,7 @@ from src.services.source_health import SourceHealthTracker
 from src.services.fallback_price_provider import FallbackPriceProvider
 from src.services.final_price import select_final_price
 from src.search.lbj_api import fetch_lbj_query_price
+from src.image_text import scan_image_urls_for_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -254,15 +255,27 @@ class DailyMonitorService:
         )
 
     def _mark_candidate_excluded(
-        self, candidate: CandidateRow, result: DailyMonitorResult, keyword: str
+        self,
+        candidate: CandidateRow,
+        result: DailyMonitorResult,
+        keyword: str,
+        extraction: ExtractionResult | None = None,
+        evidence: dict[str, Any] | None = None,
     ) -> ExtractionResult:
+        raw_data = evidence or {}
+        error_message = (
+            f"Excluded by image rule: {keyword}"
+            if extraction is not None
+            else f"Excluded by keyword: {keyword}"
+        )
         self.db.update_candidate_status(candidate.id, "excluded")
         self.db.insert_snapshot(
             candidate_id=candidate.id,
             product_id=candidate.product_id,
             price=None,
             suggested_price=candidate.suggested_price,
-            error_message=f"Excluded by keyword: {keyword}",
+            error_message=error_message,
+            raw_data=raw_data,
         )
         # Excluded is often counted as "normal" so it doesn't alarm the user
         result.normal += 1
@@ -274,14 +287,23 @@ class DailyMonitorService:
             platform=candidate.platform or "",
             source="direct_html",
             url=candidate.url,
-            status="error",
-            error_message=f"Excluded by keyword: {keyword}",
+            title=extraction.title if extraction else "",
+            seller=extraction.seller if extraction else "",
+            price=extraction.price if extraction else None,
+            status="excluded" if extraction else "error",
+            error_message=error_message,
+            raw_data=raw_data,
         )
         
         return ExtractionResult(
+            title=extraction.title if extraction else "",
+            price=extraction.price if extraction else None,
+            seller=extraction.seller if extraction else "",
+            screenshot_path=extraction.screenshot_path if extraction else "",
             platform=candidate.platform or "",
+            raw_data=raw_data,
             parse_status="excluded",
-            error_message=f"Excluded by keyword: {keyword}",
+            error_message=error_message,
         )
 
     def _check_candidate(
@@ -401,6 +423,26 @@ class DailyMonitorService:
                 platform=platform_lower,
                 screenshot_dir=screenshot_dir,
             )
+
+            if platform_lower == "momo" and self.config.enable_ocr:
+                image_scan = scan_image_urls_for_text(
+                    direct_extraction.image_urls,
+                    marker="官方",
+                    timeout_seconds=int(self.config.request_timeout_seconds),
+                )
+                direct_extraction.raw_data.update(image_scan.as_raw_data())
+                if image_scan.matched:
+                    LOGGER.info(
+                        "MOMO 圖片含官方字樣，排除候選連結：%s",
+                        candidate.url[:100],
+                    )
+                    return self._mark_candidate_excluded(
+                        candidate,
+                        result,
+                        "MOMO 圖片含官方字樣",
+                        extraction=direct_extraction,
+                        evidence=direct_extraction.raw_data,
+                    )
             
             # Map parse_status to observation status
             obs_status = "success"

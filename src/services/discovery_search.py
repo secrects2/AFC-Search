@@ -15,6 +15,8 @@ from pathlib import Path
 
 from src.config import AppConfig, load_config
 from src.database import Database
+from src.image_text import ImageTextScanResult, scan_image_urls_for_text
+from src.parsers import get_parser
 from src.search.serp_api import detect_platform
 from src.search.search_api import build_chain_provider
 from src.services.budget_tracker import BudgetExhausted, BudgetTracker
@@ -35,6 +37,34 @@ class DiscoverySearchService:
         self.config = config
         self.project_root = project_root
         self.budget = BudgetTracker(db)
+
+    def _scan_momo_official_image(self, url: str) -> ImageTextScanResult:
+        if not self.config.enable_ocr:
+            return ImageTextScanResult("ocr_disabled", marker="官方")
+
+        try:
+            parser = get_parser("momo", url, self.config)
+            html_text = parser.fetch_page(url, platform="momo")
+            extract_images = getattr(parser, "_extract_image_urls", None)
+            if not callable(extract_images):
+                return ImageTextScanResult(
+                    "image_extract_failed",
+                    marker="官方",
+                    error_message="MOMO parser cannot extract image URLs",
+                )
+            image_urls = extract_images(html_text, url)
+        except Exception as exc:
+            return ImageTextScanResult(
+                "page_fetch_failed",
+                marker="官方",
+                error_message=str(exc),
+            )
+
+        return scan_image_urls_for_text(
+            image_urls,
+            marker="官方",
+            timeout_seconds=int(self.config.request_timeout_seconds),
+        )
 
     def search_product(self, product_id: int) -> dict[str, int]:
         """Search for a single product. Returns {found, new, existing}."""
@@ -141,6 +171,14 @@ class DiscoverySearchService:
                 skipped_count += 1
                 continue
 
+            detected_platform = detect_platform(sr.url)
+            platform = sr.platform if sr.platform not in {"", "manual", "other"} else detected_platform
+            raw_data = dict(sr.raw_data or {})
+            image_scan: ImageTextScanResult | None = None
+            if platform.lower() == "momo":
+                image_scan = self._scan_momo_official_image(sr.url)
+                raw_data.update(image_scan.as_raw_data())
+
             # --- Global Exclusions ---
             is_excluded = any(ex.lower() in result_title_lower for ex in global_exclusions)
             status = "excluded" if is_excluded else "active"
@@ -150,8 +188,13 @@ class DiscoverySearchService:
                     sr.product_name[:40], sr.url[:60],
                 )
 
-            detected_platform = detect_platform(sr.url)
-            platform = sr.platform if sr.platform not in {"", "manual", "other"} else detected_platform
+            if image_scan and image_scan.matched:
+                status = "excluded"
+                raw_data["exclusion_reason"] = "MOMO 圖片含官方字樣"
+                LOGGER.info(
+                    "MOMO 圖片含官方字樣，排除候選連結：[%s] → %s",
+                    sr.product_name[:40], sr.url[:80],
+                )
             self.db.upsert_candidate(
                 product_id=product_id,
                 url=sr.url,
@@ -161,7 +204,7 @@ class DiscoverySearchService:
                 source_found_by=sr.source or "serpapi",
                 status=status,
                 last_price=sr.found_price,
-                raw_data=sr.raw_data or None,
+                raw_data=raw_data or None,
             )
             new_count += 1
             if score < 70:

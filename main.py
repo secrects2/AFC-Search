@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import load_config
+from src.image_text import scan_image_urls_for_text
 from src.image_matcher import best_image_match
 from src.loader import Product, read_products
 from src.matcher import classify_match, match_score
@@ -194,6 +195,19 @@ def run(argv: list[str] | None = None) -> int:
                 output = parser.parse(link.url, run_output_dir)
                 title_for_match = output.title or link.product_name
                 score = match_score(product.product_name, title_for_match)
+                if (output.platform or link.platform).lower() == "momo" and config.enable_ocr:
+                    image_scan = scan_image_urls_for_text(
+                        output.image_urls or [],
+                        marker="官方",
+                        timeout_seconds=int(config.request_timeout_seconds),
+                    )
+                    output.raw_data.update(image_scan.as_raw_data())
+                    if image_scan.matched:
+                        LOGGER.info(
+                            "MOMO 圖片含官方字樣，排除報表結果：%s",
+                            link.url[:100],
+                        )
+                        continue
                 if (
                     config.enable_image_match
                     and score < int(config.match_threshold)
