@@ -12,6 +12,18 @@ class ShopeeSearchProvider(BaseSearchProvider):
     def __init__(self, timeout: int = 15) -> None:
         self.timeout = timeout
         self._playwright_available = None
+        self.last_status = "idle"
+        self.last_error = ""
+
+    @staticmethod
+    def _is_verification_page(url: str, body_text: str = "") -> bool:
+        """Identify Shopee's traffic verification page without logging its ID."""
+        url_lower = (url or "").casefold()
+        body_lower = (body_text or "").casefold()
+        return any(
+            marker in url_lower or marker in body_lower
+            for marker in ("/verify/", "traffic/error", "verify traffic", "頁面無法顯示")
+        )
 
     @property
     def enabled(self) -> bool:
@@ -24,7 +36,10 @@ class ShopeeSearchProvider(BaseSearchProvider):
         return self._playwright_available
 
     def search(self, product: Product, max_results: int) -> list[SearchResult]:
+        self.last_status = "started"
+        self.last_error = ""
         if not self.enabled:
+            self.last_status = "unavailable"
             return []
 
         keyword = product.product_name
@@ -50,10 +65,24 @@ class ShopeeSearchProvider(BaseSearchProvider):
             url = f"https://shopee.tw/search?keyword={urllib.parse.quote(keyword)}"
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
-                
+
                 # Wait a bit for JS to load
                 page.wait_for_timeout(3000)
-                
+
+                body_text = ""
+                try:
+                    body_text = page.locator("body").inner_text(timeout=5000)
+                except Exception:
+                    pass
+                if self._is_verification_page(page.url, body_text):
+                    self.last_status = "blocked"
+                    self.last_error = "Shopee traffic verification page"
+                    LOGGER.warning(
+                        "Shopee search blocked by traffic verification for '%s'; using fallback providers",
+                        keyword,
+                    )
+                    return []
+
                 # Find all <a> tags that look like shopee item links
                 links = page.locator('a[href*="-i."]').all()
                 for link in links:
@@ -81,8 +110,11 @@ class ShopeeSearchProvider(BaseSearchProvider):
                         source=self.name,
                         platform="shopee",
                     ))
-                    
+
+                self.last_status = "success" if results else "no_results"
             except Exception as exc:
+                self.last_status = "error"
+                self.last_error = str(exc)
                 LOGGER.warning("Shopee search failed for '%s': %s", keyword, exc)
             finally:
                 browser.close()

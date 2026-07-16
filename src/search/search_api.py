@@ -111,7 +111,15 @@ class ChainSearchProvider(BaseSearchProvider):
                         seen_urls.add(normalized_url)
                         combined.append(result)
                     continue
-                attempt["status"] = "no_results"
+                provider_status = str(getattr(provider, "last_status", "") or "").strip()
+                attempt["status"] = (
+                    provider_status
+                    if provider_status in {"blocked", "error", "unavailable"}
+                    else "no_results"
+                )
+                provider_error = str(getattr(provider, "last_error", "") or "").strip()
+                if provider_error:
+                    attempt["error"] = self._redact_error(RuntimeError(provider_error))
                 LOGGER.info(
                     "%s 無結果，嘗試下一個：%s",
                     provider.name,

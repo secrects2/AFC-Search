@@ -16,12 +16,27 @@ from pathlib import Path
 from src.config import AppConfig, load_config
 from src.database import Database, is_coupon_source, is_disabled_platform
 from src.image_text import ImageTextScanResult, scan_image_urls_for_text
+from src.matcher import match_score, normalize_name
 from src.parsers import get_parser
 from src.search.serp_api import detect_platform
 from src.search.search_api import build_chain_provider
 from src.services.budget_tracker import BudgetExhausted, BudgetTracker
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _best_discovery_match_score(
+    product_name: str,
+    keywords: str,
+    found_title: str,
+) -> int:
+    """Score the product name and sufficiently specific configured aliases."""
+    scores = [match_score(product_name, found_title)]
+    for keyword in (part.strip() for part in (keywords or "").split(",")):
+        if len(normalize_name(keyword)) < 3:
+            continue
+        scores.append(match_score(keyword, found_title))
+    return max(scores, default=0)
 
 
 class DiscoverySearchService:
@@ -89,22 +104,20 @@ class DiscoverySearchService:
 
         from src.loader import Product
 
-        # Build search query: prefer keywords if set, otherwise use product name.
-        # Keywords are curated and concise, giving better search results.
-        search_name = product.product_name
-        if product.keywords:
-            # Use brand + first keyword for a focused search
-            first_kw = product.keywords.split(",")[0].strip()
-            brand_prefix = product.brand or "AFC"
-            # Avoid duplicating brand if keyword already contains it
-            if brand_prefix.lower() in first_kw.lower():
-                search_name = first_kw
-            else:
-                search_name = f"{brand_prefix} {first_kw}"
-        else:
-            name_lower = search_name.lower()
-            if "afc" not in name_lower and "genki" not in name_lower:
-                search_name = f"AFC {search_name}"
+        # Search the complete product identity. The previous implementation
+        # used only the first keyword (for example, "AFC 快調"), which omitted
+        # the distinguishing alias "每日快調" from this product.
+        search_name = product.product_name.strip()
+        brand_prefix = (product.brand or "AFC").strip()
+        if brand_prefix and brand_prefix.casefold() not in search_name.casefold():
+            search_name = f"{brand_prefix} {search_name}".strip()
+        longest_keyword = max(
+            (part.strip() for part in (product.keywords or "").split(",")),
+            key=len,
+            default="",
+        )
+        if longest_keyword and longest_keyword.casefold() not in search_name.casefold():
+            search_name = f"{search_name} {longest_keyword}".strip()
 
         LOGGER.info("搜尋關鍵字：%s (product=%s)", search_name, product.product_name)
 
@@ -118,11 +131,18 @@ class DiscoverySearchService:
         results = provider.search(temp_product, int(self.config.max_results_per_product))
 
         # Log API usage
+        provider_attempts = getattr(provider, "last_attempts", [])
+        attempt_summary = "; ".join(
+            f"{attempt.get('provider', '')}:{attempt.get('status', '')}"
+            for attempt in provider_attempts
+            if attempt.get("status") in {"blocked", "error", "unavailable"}
+        )
         self.db.log_api_usage(
             provider=provider.last_provider,
             query=product.product_name,
             result_count=len(results),
             success=len(results) > 0,
+            error_message=attempt_summary,
             purpose="discovery",
         )
 
@@ -130,8 +150,6 @@ class DiscoverySearchService:
         existing_candidates = self.db.list_candidates(product_id=product_id)
         existing_urls = {c.url for c in existing_candidates}
         global_exclusions = self.db.get_all_exclusion_keywords()
-
-        from src.matcher import match_score
 
         # Determine brand identifiers to check in result titles.
         # All our products belong to AFC or its sub-brands.
@@ -162,7 +180,11 @@ class DiscoverySearchService:
                 continue
 
             # --- Name matching: compare search result title vs product name ---
-            score = match_score(product.product_name, sr.product_name)
+            score = _best_discovery_match_score(
+                product.product_name,
+                product.keywords,
+                sr.product_name,
+            )
             if score < 50:
                 LOGGER.info(
                     "跳過不相關結果 (score=%d): [%s] vs [%s] → %s",
@@ -181,6 +203,7 @@ class DiscoverySearchService:
                 skipped_count += 1
                 continue
             raw_data = dict(sr.raw_data or {})
+            raw_data["discovery_match_score"] = score
             source_found_by = sr.source or "serpapi"
             coupon_source = any(
                 is_coupon_source(value)

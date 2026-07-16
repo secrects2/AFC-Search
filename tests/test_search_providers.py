@@ -9,6 +9,7 @@ from src.search.brave_search import BraveSearchProvider
 from src.search.cache import SearchCache
 from src.search.search_api import ChainSearchProvider, build_chain_provider
 from src.search.serp_api import SerpAPIProvider, detect_platform
+from src.search.shopee_search import ShopeeSearchProvider
 
 
 # --- Platform detection ---
@@ -289,6 +290,38 @@ def test_chain_records_provider_attempts() -> None:
         "status": "no_results",
         "result_count": 0,
     }]
+
+
+def test_chain_records_shopee_verification_as_blocked() -> None:
+    product = _make_product()
+
+    class BlockedProvider:
+        name = "shopee"
+        enabled = True
+        last_status = "blocked"
+        last_error = "Shopee traffic verification page"
+
+        def search(self, product, max_results):
+            return []
+
+    chain = ChainSearchProvider(providers=[BlockedProvider()])
+
+    assert chain.search(product, 5) == []
+    assert chain.last_attempts == [{
+        "provider": "shopee",
+        "status": "blocked",
+        "result_count": 0,
+        "error": "Shopee traffic verification page",
+    }]
+
+
+def test_shopee_provider_recognizes_verification_page() -> None:
+    assert ShopeeSearchProvider._is_verification_page(
+        "https://shopee.tw/verify/traffic/error"
+    )
+    assert not ShopeeSearchProvider._is_verification_page(
+        "https://shopee.tw/search?keyword=GENKI"
+    )
 
 
 def test_chain_returns_cached_results(tmp_path: Path) -> None:
