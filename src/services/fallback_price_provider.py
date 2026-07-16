@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.database import Database, ProductRow, CandidateRow
+from src.database import Database, ProductRow, CandidateRow, is_disabled_platform
 from src.loader import Product
 from src.matcher import match_score
 from src.search.base import SearchResult
@@ -140,6 +140,15 @@ class FallbackPriceProvider:
         Query fallback platforms to find a matching price for this candidate.
         Returns a dict representing a price_observation, or None if failed.
         """
+        if is_disabled_platform(candidate.platform):
+            self._last_audit = {
+                "expected_platform": candidate.platform,
+                "provider_chain": "disabled_platform",
+                "match_status": "platform_disabled",
+                "attempts": [],
+            }
+            return None
+
         # Determine search keyword
         if product.keywords:
             first_kw = product.keywords.split(",")[0].strip()
@@ -235,6 +244,11 @@ class FallbackPriceProvider:
 
         for res in results:
             if res.found_price is None:
+                continue
+
+            matched_result_platform = self._result_platform(res)
+            if is_disabled_platform(matched_result_platform):
+                LOGGER.info("Ignoring fallback result from disabled platform: %s", res.url[:100])
                 continue
 
             platform_match, matched_platform = self._matches_expected_platform(

@@ -61,11 +61,23 @@ _TRACKING_QUERY_KEYS = {
 }
 _TRACKING_QUERY_PREFIXES = ("af_", "utm_", "vtm_")
 _TRACKING_QUERY_KEYS_LOWER = {item.casefold() for item in _TRACKING_QUERY_KEYS}
+DISABLED_PLATFORMS = frozenset({"coupang"})
 
 
 def is_coupon_source(value: object) -> bool:
     """Return True when a provider/source label identifies coupon traffic."""
     return "coupon" in str(value or "").strip().casefold()
+
+
+def is_disabled_platform(value: object) -> bool:
+    """Return True when a marketplace is permanently excluded from monitoring."""
+    return str(value or "").strip().casefold() in DISABLED_PLATFORMS
+
+
+def is_disabled_platform_url(value: object) -> bool:
+    """Return True when a URL belongs to a permanently excluded marketplace."""
+    hostname = (urlsplit(str(value or "")).hostname or "").casefold()
+    return "coupang.com" in hostname
 
 
 def canonical_final_url(url: str) -> str:
@@ -408,6 +420,7 @@ class Database:
             self._migrate_snapshot_final_price(conn)
             self._migrate_candidate_multi_source(conn)
             self._migrate_coupon_source_candidates(conn)
+            self._migrate_disabled_platform_candidates(conn)
             conn.commit()
         finally:
             conn.close()
@@ -592,6 +605,44 @@ class Database:
         if migrated:
             LOGGER.info("Excluded %d existing coupon-source candidates", migrated)
 
+    def _migrate_disabled_platform_candidates(self, conn: sqlite3.Connection) -> None:
+        """Exclude existing candidates from permanently disabled marketplaces."""
+        rows = conn.execute(
+            """
+            SELECT id, platform, raw_data
+            FROM product_candidates
+            WHERE status != 'excluded'
+            """
+        ).fetchall()
+        migrated = 0
+        for row in rows:
+            if not is_disabled_platform(row["platform"]):
+                continue
+            try:
+                raw_data = json.loads(row["raw_data"] or "{}")
+            except (TypeError, ValueError):
+                raw_data = {}
+            if not isinstance(raw_data, dict):
+                raw_data = {}
+            raw_data.update(
+                {
+                    "exclusion_reason": "platform_coupang_disabled",
+                    "disabled_platform": "coupang",
+                }
+            )
+            conn.execute(
+                """
+                UPDATE product_candidates
+                SET status='excluded', last_checked_at=?, raw_data=?
+                WHERE id=?
+                """,
+                (_now_iso(), json.dumps(raw_data, ensure_ascii=False), row["id"]),
+            )
+            migrated += 1
+
+        if migrated:
+            LOGGER.info("Excluded %d existing candidates from disabled platforms", migrated)
+
     # -- Products -----------------------------------------------------------
 
     def upsert_product(
@@ -710,6 +761,10 @@ class Database:
         """Insert or update a candidate by URL. Returns candidate id."""
         incoming_raw_data = dict(raw_data or {}) if raw_data is not None else None
         coupon_source = is_coupon_source(source_found_by)
+        disabled_platform_url = is_disabled_platform_url(url)
+        disabled_platform = is_disabled_platform(platform) or disabled_platform_url
+        if disabled_platform_url:
+            platform = "coupang"
         if incoming_raw_data is not None:
             coupon_source = coupon_source or any(
                 is_coupon_source(incoming_raw_data.get(key))
@@ -725,6 +780,15 @@ class Database:
                     "coupon_source_excluded": True,
                 }
             )
+        if disabled_platform:
+            status = "excluded"
+            raw_data = incoming_raw_data or {}
+            raw_data.update(
+                {
+                    "exclusion_reason": "platform_coupang_disabled",
+                    "disabled_platform": "coupang",
+                }
+            )
         raw_json = json.dumps(raw_data, ensure_ascii=False) if raw_data is not None else None
         with self._cursor() as (conn, cur):
             cur.execute(
@@ -737,7 +801,7 @@ class Database:
                     "seller=?", "source_found_by=?",
                 ]
                 params: list[Any] = [product_id, platform, title, seller, source_found_by]
-                if coupon_source:
+                if coupon_source or disabled_platform:
                     updates.append("status=?")
                     params.append("excluded")
                 if last_price is not None:

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import AppConfig, load_config
-from src.database import Database, CandidateRow, is_coupon_source
+from src.database import Database, CandidateRow, is_coupon_source, is_disabled_platform
 from src.extractors import ProductPageExtractor, ExtractionResult
 from src.services.platform_rate_limiter import PlatformRateLimiter
 from src.services.source_health import SourceHealthTracker
@@ -267,6 +267,8 @@ class DailyMonitorService:
         raw_data = evidence or {}
         if keyword == "source_coupon":
             error_message = "Excluded by source: coupon"
+        elif keyword == "platform_coupang_disabled":
+            error_message = "Excluded by platform: coupang"
         elif keyword == "duplicate_final_product_page":
             error_message = "Excluded by duplicate final product page"
         elif extraction is not None:
@@ -326,6 +328,28 @@ class DailyMonitorService:
             candidate.url[:80],
         )
 
+        if is_disabled_platform(candidate.platform):
+            evidence = {
+                "platform": candidate.platform,
+                "exclusion_reason": "platform_coupang_disabled",
+                "disabled_platform": "coupang",
+            }
+            disabled_extraction = ExtractionResult(
+                title=candidate.title,
+                price=candidate.last_price,
+                seller=candidate.seller,
+                platform=candidate.platform,
+                raw_data=evidence,
+                parse_status="excluded",
+            )
+            return self._mark_candidate_excluded(
+                candidate,
+                result,
+                "platform_coupang_disabled",
+                extraction=disabled_extraction,
+                evidence=evidence,
+            )
+
         if is_coupon_source(candidate.source_found_by):
             evidence = {
                 "source_found_by": candidate.source_found_by,
@@ -335,7 +359,7 @@ class DailyMonitorService:
                 title=candidate.title,
                 price=candidate.last_price,
                 seller=candidate.seller,
-                platform=platform,
+                platform=candidate.platform,
                 raw_data=evidence,
                 parse_status="excluded",
             )

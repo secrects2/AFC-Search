@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 
-from src.database import Database
+from src.database import Database, is_disabled_platform
 from src.loader import parse_price_value
 from src.search.serp_api import detect_platform
 
@@ -161,8 +161,13 @@ def import_manual_links(db: Database, csv_path: Path) -> dict[str, int]:
             skipped += 1
             continue
 
+        detected_platform = detect_platform(url)
         if not platform:
-            platform = detect_platform(url)
+            platform = detected_platform
+        if is_disabled_platform(platform) or is_disabled_platform(detected_platform):
+            LOGGER.info("Skipping permanently disabled platform manual link: %s", url[:100])
+            skipped += 1
+            continue
 
         db.upsert_candidate(
             product_id=product_id,

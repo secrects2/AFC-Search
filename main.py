@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import load_config
-from src.database import is_coupon_source
+from src.database import is_coupon_source, is_disabled_platform
 from src.image_text import scan_image_urls_for_text
 from src.image_matcher import best_image_match
 from src.loader import Product, read_products
@@ -18,6 +18,7 @@ from src.monitor_catalog import load_monitor_products
 from src.parsers import get_parser
 from src.reporter import write_reports
 from src.search import ManualSearchProvider
+from src.search.serp_api import detect_platform
 from src.search.search_api import build_chain_provider
 from src.utils import copy_latest_reports, ensure_dir, resolve_project_path, run_timestamp, setup_logging
 
@@ -192,6 +193,10 @@ def run(argv: list[str] | None = None) -> int:
                 continue
 
             for link in all_links:
+                detected_platform = detect_platform(link.url)
+                if is_disabled_platform(link.platform) or is_disabled_platform(detected_platform):
+                    LOGGER.info("Skipping permanently disabled platform result: %s", link.url[:100])
+                    continue
                 if any(
                     is_coupon_source(value)
                     for value in (

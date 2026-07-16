@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from src.config import AppConfig, load_config
-from src.database import Database, is_coupon_source
+from src.database import Database, is_coupon_source, is_disabled_platform
 from src.image_text import ImageTextScanResult, scan_image_urls_for_text
 from src.parsers import get_parser
 from src.search.serp_api import detect_platform
@@ -173,6 +173,13 @@ class DiscoverySearchService:
 
             detected_platform = detect_platform(sr.url)
             platform = sr.platform if sr.platform not in {"", "manual", "other"} else detected_platform
+            if is_disabled_platform(platform) or is_disabled_platform(detected_platform):
+                LOGGER.info(
+                    "Skipping permanently disabled platform result: [%s] %s",
+                    sr.product_name[:40], sr.url[:60],
+                )
+                skipped_count += 1
+                continue
             raw_data = dict(sr.raw_data or {})
             source_found_by = sr.source or "serpapi"
             coupon_source = any(

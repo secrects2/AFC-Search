@@ -106,7 +106,7 @@ def test_shopee_search_failed_uses_feebee_fallback(monkeypatch, tmp_path: Path) 
     assert extraction.raw_data["price_source"] == "feebee"
 
 
-@pytest.mark.parametrize("platform", ["momo", "yahoo", "ruten", "shopee", "pchome", "coupang"])
+@pytest.mark.parametrize("platform", ["momo", "yahoo", "ruten", "shopee", "pchome"])
 def test_all_platforms_share_the_same_fallback_entrypoint(
     monkeypatch, tmp_path: Path, platform: str
 ) -> None:
@@ -183,8 +183,8 @@ def test_confirm_candidate_records_manual_price_and_resumes_monitoring(tmp_path:
     product_id = db.upsert_product("AFC 究極女調", suggested_price=2380)
     candidate_id = db.upsert_candidate(
         product_id=product_id,
-        url="https://www.tw.coupang.com/products/1",
-        platform="coupang",
+        url="https://24h.pchome.com.tw/prod/DBADRG-A900BT98Q",
+        platform="pchome",
         title="AFC 究極女調 60顆",
         source_found_by="lbj",
     )
