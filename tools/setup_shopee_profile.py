@@ -77,6 +77,7 @@ def main() -> None:
             user_data_dir=str(profile_dir),
             headless=False,
             channel="chrome",
+            chromium_sandbox=True,
             locale="zh-TW",
             timezone_id="Asia/Taipei",
             viewport={"width": 1366, "height": 900},

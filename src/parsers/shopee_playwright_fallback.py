@@ -179,6 +179,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
                 user_data_dir=str(profile_path),
                 headless=self.headless,
                 channel=self.browser_channel or None,
+                chromium_sandbox=True,
                 viewport={"width": 1366, "height": 900},
                 locale="zh-TW",
                 timezone_id="Asia/Taipei",

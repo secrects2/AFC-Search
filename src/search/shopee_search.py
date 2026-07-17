@@ -85,6 +85,7 @@ class ShopeeSearchProvider(BaseSearchProvider):
                         user_data_dir=str(profile_path),
                         headless=self.headless,
                         channel=self.browser_channel or None,
+                        chromium_sandbox=True,
                         args=["--lang=zh-TW"],
                         **browser_options,
                     )
