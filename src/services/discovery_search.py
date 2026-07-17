@@ -81,6 +81,12 @@ class DiscoverySearchService:
             timeout_seconds=int(self.config.request_timeout_seconds),
         )
 
+    def _shopee_profile_dir(self) -> Path:
+        profile_dir = Path(self.config.shopee_profile_dir).expanduser()
+        if profile_dir.is_absolute():
+            return profile_dir
+        return self.project_root / profile_dir
+
     def search_product(self, product_id: int) -> dict[str, int]:
         """Search for a single product. Returns {found, new, existing}."""
         self.budget.check_budget()
@@ -96,6 +102,8 @@ class DiscoverySearchService:
             cache_path=self.project_root / "data" / "search_cache.json",
             cache_hours=int(self.config.search_cache_hours),
             timeout=float(self.config.request_timeout_seconds),
+            shopee_profile_dir=self._shopee_profile_dir(),
+            shopee_headless=bool(self.config.shopee_headless),
         )
 
         if not provider.enabled:

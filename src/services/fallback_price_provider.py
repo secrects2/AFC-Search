@@ -45,6 +45,13 @@ class FallbackPriceProvider:
         self._brave_key = str(_config_value(config, "brave_api_key", "") or "")
         self._platforms = list(_config_value(config, "platforms", []) or [])
         self._max_results = int(_config_value(config, "max_results_per_product", 30) or 30)
+        self._shopee_profile_dir = str(
+            _config_value(config, "shopee_profile_dir", "data/browser_profiles/shopee")
+            or "data/browser_profiles/shopee"
+        )
+        self._shopee_headless = self._as_bool(
+            _config_value(config, "shopee_headless", False)
+        )
 
         # A daily run may have many candidates for one product. Reuse the
         # comparison-page results within that run instead of querying the same
@@ -56,6 +63,12 @@ class FallbackPriceProvider:
     def last_audit(self) -> dict[str, Any]:
         """Return the audit trail for the most recent fallback attempt."""
         return dict(self._last_audit)
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     @staticmethod
     def _result_platform(result: SearchResult) -> str:
@@ -130,7 +143,11 @@ class FallbackPriceProvider:
             specs.append(
                 (
                     "shopee",
-                    lambda: ShopeeSearchProvider(timeout=int(self._request_timeout)),
+                    lambda: ShopeeSearchProvider(
+                        timeout=int(self._request_timeout),
+                        profile_dir=self._shopee_profile_dir,
+                        headless=self._shopee_headless,
+                    ),
                 )
             )
         return specs

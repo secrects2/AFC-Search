@@ -342,3 +342,19 @@ def test_build_chain_provider_no_keys(tmp_path: Path) -> None:
     chain = build_chain_provider("", "", ["shopee"], tmp_path / "c.json")
     assert chain.enabled
     assert "findprice" in [provider.name for provider in chain.providers]
+
+
+def test_build_chain_provider_uses_persistent_shopee_profile(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "shopee-profile"
+    chain = build_chain_provider(
+        "",
+        "",
+        ["shopee"],
+        tmp_path / "c.json",
+        shopee_profile_dir=profile_dir,
+        shopee_headless=True,
+    )
+
+    provider = next(provider for provider in chain.providers if provider.name == "shopee")
+    assert provider.profile_dir == str(profile_dir)
+    assert provider.headless is True

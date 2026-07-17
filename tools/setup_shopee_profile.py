@@ -1,52 +1,76 @@
-"""Interactive tool to set up a persistent Shopee browser profile.
+"""Create a persistent local browser profile for Shopee.
 
-Run this once before using the Shopee parser:
-
-    python tools/setup_shopee_profile.py
-
-This opens a visible Chromium browser and navigates to shopee.tw.
-Manually select your preferred language and region, then press Enter
-in the terminal to save the profile and close the browser.
-
-Subsequent Shopee parser runs will reuse the saved profile so that
-the language selection page no longer appears.
+Run this once and manually complete Shopee login, OTP, and any CAPTCHA in the
+visible browser window. The password is entered only in the browser; this tool
+does not read, print, or store credentials itself.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
-# Ensure project root is on sys.path so src.* imports work when run directly.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Create the persistent Shopee login profile."
+    )
+    parser.add_argument(
+        "--url",
+        default="https://shopee.tw/",
+        help="URL to open while signing in (default: Shopee homepage)",
+    )
+    parser.add_argument(
+        "--profile-dir",
+        default="",
+        help="Optional profile directory; defaults to config.yaml",
+    )
+    return parser.parse_args()
+
+
+def _resolve_profile_dir(cli_value: str) -> Path:
+    if cli_value:
+        configured = Path(cli_value).expanduser()
+    else:
+        try:
+            from src.config import load_config
+
+            configured = Path(
+                load_config(PROJECT_ROOT / "config.yaml").shopee_profile_dir
+            )
+        except Exception:
+            configured = Path("data/browser_profiles/shopee")
+    return configured if configured.is_absolute() else PROJECT_ROOT / configured
+
+
 def main() -> None:
+    args = _parse_args()
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("ERROR: Playwright is not installed.")
-        print("Please run:  pip install playwright && playwright install chromium")
+        print("Please run: pip install playwright && playwright install chromium")
         sys.exit(1)
 
-    profile_dir = PROJECT_ROOT / "data" / "browser_profiles" / "shopee"
+    profile_dir = _resolve_profile_dir(args.profile_dir)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
     print("  Shopee Browser Profile Setup")
     print("=" * 60)
+    print(f"Profile directory: {profile_dir}")
+    print(f"Opening: {args.url}")
     print()
-    print(f"  Profile directory: {profile_dir}")
+    print("In the browser window:")
+    print("  1. Log in to your Shopee account.")
+    print("  2. Complete any OTP or CAPTCHA shown by Shopee.")
+    print("  3. Confirm that the page loads normally.")
     print()
-    print("  A Chromium browser window will open and navigate to shopee.tw.")
-    print("  Please manually:")
-    print("    1. Select your preferred language (繁體中文)")
-    print("    2. Select your region if prompted")
-    print("    3. Wait for the homepage to fully load")
-    print()
-    print("  When finished, come back here and press Enter to save & close.")
+    print("Return here and press Enter after login is complete.")
     print("=" * 60)
-    print()
 
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
@@ -62,29 +86,19 @@ def main() -> None:
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
         )
-
         page = context.pages[0] if context.pages else context.new_page()
-
-        print("Opening https://shopee.tw/ ...")
         try:
-            page.goto("https://shopee.tw/", wait_until="domcontentloaded", timeout=30000)
+            page.goto(args.url, wait_until="domcontentloaded", timeout=30000)
         except Exception as exc:
-            print(f"Warning: Navigation had an issue: {exc}")
-            print("The browser is still open — you can navigate manually.")
+            print(f"Navigation warning: {exc}")
+            print("The browser remains open; navigate manually if needed.")
 
-        print()
-        input(">>> Press Enter when you have finished selecting the language... ")
-        print()
+        input(">>> Press Enter after you have finished logging in... ")
         print("Saving profile and closing browser...")
-
         context.close()
 
-    print()
-    print("Done! Profile saved to:")
-    print(f"  {profile_dir}")
-    print()
-    print("The Shopee parser will now reuse this profile automatically.")
-    print("If Shopee shows the language page again, re-run this script.")
+    print(f"Profile saved: {profile_dir}")
+    print("The Shopee search and price providers will reuse this profile.")
 
 
 if __name__ == "__main__":

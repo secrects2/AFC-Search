@@ -1,19 +1,33 @@
 import logging
 import urllib.parse
+from pathlib import Path
+
 from src.loader import Product
 from src.search.base import BaseSearchProvider, SearchResult
-import time
 
 LOGGER = logging.getLogger(__name__)
 
 class ShopeeSearchProvider(BaseSearchProvider):
     name = "shopee"
 
-    def __init__(self, timeout: int = 15) -> None:
+    def __init__(
+        self,
+        timeout: int = 15,
+        profile_dir: str | Path = "data/browser_profiles/shopee",
+        headless: bool = False,
+    ) -> None:
         self.timeout = timeout
+        self.profile_dir = str(profile_dir or "")
+        self.headless = headless
         self._playwright_available = None
         self.last_status = "idle"
         self.last_error = ""
+
+    def _profile_path(self) -> Path | None:
+        if not self.profile_dir:
+            return None
+        path = Path(self.profile_dir).expanduser()
+        return path if path.is_absolute() else Path.cwd() / path
 
     @staticmethod
     def _is_verification_page(url: str, body_text: str = "") -> bool:
@@ -49,21 +63,34 @@ class ShopeeSearchProvider(BaseSearchProvider):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": 1366, "height": 900},
-                locale="zh-TW",
-                timezone_id="Asia/Taipei",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = context.new_page()
-
-            url = f"https://shopee.tw/search?keyword={urllib.parse.quote(keyword)}"
+            browser = None
+            context = None
             try:
+                browser_options = {
+                    "viewport": {"width": 1366, "height": 900},
+                    "locale": "zh-TW",
+                    "timezone_id": "Asia/Taipei",
+                    "user_agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                }
+                profile_path = self._profile_path()
+                if profile_path:
+                    profile_path.mkdir(parents=True, exist_ok=True)
+                    context = pw.chromium.launch_persistent_context(
+                        user_data_dir=str(profile_path),
+                        headless=self.headless,
+                        args=["--lang=zh-TW"],
+                        **browser_options,
+                    )
+                else:
+                    browser = pw.chromium.launch(headless=self.headless)
+                    context = browser.new_context(**browser_options)
+
+                page = context.new_page()
+                url = f"https://shopee.tw/search?keyword={urllib.parse.quote(keyword)}"
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
 
                 # Wait a bit for JS to load
@@ -117,6 +144,9 @@ class ShopeeSearchProvider(BaseSearchProvider):
                 self.last_error = str(exc)
                 LOGGER.warning("Shopee search failed for '%s': %s", keyword, exc)
             finally:
-                browser.close()
+                if context is not None:
+                    context.close()
+                if browser is not None:
+                    browser.close()
                 
         return results

@@ -155,12 +155,20 @@ def build_chain_provider(
     cache_path: Path | None = None,
     cache_hours: int = 24,
     timeout: float = 15.0,
+    shopee_profile_dir: str | Path = "data/browser_profiles/shopee",
+    shopee_headless: bool = False,
 ) -> ChainSearchProvider:
     """Helper to build the default search chain."""
     providers: list[BaseSearchProvider] = []
 
     # 1. Specialized providers (most likely to have accurate, e-commerce specific results)
-    providers.append(ShopeeSearchProvider())
+    providers.append(
+        ShopeeSearchProvider(
+            timeout=int(timeout),
+            profile_dir=shopee_profile_dir,
+            headless=shopee_headless,
+        )
+    )
     providers.append(FeebeeSearchProvider(platforms=platforms))
     providers.append(FindPriceProvider())
     providers.append(BigGoSearchProvider(platforms=platforms))
