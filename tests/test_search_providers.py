@@ -358,3 +358,4 @@ def test_build_chain_provider_uses_persistent_shopee_profile(tmp_path: Path) -> 
     provider = next(provider for provider in chain.providers if provider.name == "shopee")
     assert provider.profile_dir == str(profile_dir)
     assert provider.headless is True
+    assert provider.browser_channel == "chrome"

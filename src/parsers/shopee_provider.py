@@ -119,10 +119,12 @@ def build_shopee_provider_chain() -> list[ShopeePriceProvider]:
     if mode in ("playwright", "chain"):
         profile_dir = os.environ.get("SHOPEE_PROFILE_DIR", "data/browser_profiles/shopee")
         headless = os.environ.get("SHOPEE_HEADLESS", "false").lower() in ("true", "1", "yes")
+        browser_channel = os.environ.get("SHOPEE_BROWSER_CHANNEL", "chrome")
         providers.append(ShopeePlaywrightFallbackProvider(
             timeout=timeout,
             profile_dir=profile_dir,
             headless=headless,
+            browser_channel=browser_channel,
         ))
 
     if not providers:

@@ -110,6 +110,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
         timeout: int = 30,
         profile_dir: str = "",
         headless: bool = False,
+        browser_channel: str = "chrome",
     ) -> None:
         self.timeout = timeout
         self.profile_dir = profile_dir or os.environ.get(
@@ -117,6 +118,9 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
         )
         self.headless = headless if profile_dir else (
             os.environ.get("SHOPEE_HEADLESS", "false").lower() in ("true", "1", "yes")
+        )
+        self.browser_channel = browser_channel or os.environ.get(
+            "SHOPEE_BROWSER_CHANNEL", "chrome"
         )
         self._playwright_available: bool | None = None
 
@@ -174,6 +178,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
             context = pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_path),
                 headless=self.headless,
+                channel=self.browser_channel or None,
                 viewport={"width": 1366, "height": 900},
                 locale="zh-TW",
                 timezone_id="Asia/Taipei",

@@ -15,10 +15,12 @@ class ShopeeSearchProvider(BaseSearchProvider):
         timeout: int = 15,
         profile_dir: str | Path = "data/browser_profiles/shopee",
         headless: bool = False,
+        browser_channel: str = "chrome",
     ) -> None:
         self.timeout = timeout
         self.profile_dir = str(profile_dir or "")
         self.headless = headless
+        self.browser_channel = browser_channel.strip()
         self._playwright_available = None
         self.last_status = "idle"
         self.last_error = ""
@@ -82,6 +84,7 @@ class ShopeeSearchProvider(BaseSearchProvider):
                     context = pw.chromium.launch_persistent_context(
                         user_data_dir=str(profile_path),
                         headless=self.headless,
+                        channel=self.browser_channel or None,
                         args=["--lang=zh-TW"],
                         **browser_options,
                     )
