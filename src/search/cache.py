@@ -36,6 +36,7 @@ def _result_to_dict(r: SearchResult) -> dict[str, Any]:
         "searched_at": r.searched_at,
         "found_price": r.found_price,
         "seller": r.seller,
+        "raw_data": r.raw_data,
     }
 
 
@@ -51,6 +52,7 @@ def _dict_to_result(d: dict[str, Any], cached: bool = True) -> SearchResult:
         searched_at=d.get("searched_at", ""),
         found_price=d.get("found_price"),
         seller=d.get("seller", ""),
+        raw_data=d.get("raw_data", {}) or {},
     )
 
 

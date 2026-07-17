@@ -324,6 +324,18 @@ def test_shopee_provider_recognizes_verification_page() -> None:
     )
 
 
+def test_shopee_ui_result_helpers_extract_canonical_price_and_title() -> None:
+    card_text = "AFC GENKI+ 元氣每日快調乳酸菌顆粒食品 60包\n$ 1,380\n已售出 12"
+    assert ShopeeSearchProvider._extract_result_title(card_text).startswith("AFC GENKI+")
+    assert ShopeeSearchProvider._extract_result_price(card_text) == 1380
+    assert ShopeeSearchProvider._is_manual_verification_body(
+        "\u5b89\u5168\u6027\u9a57\u8b49 \u8acb\u6ed1\u52d5\u4ee5\u5b8c\u6210\u62fc\u5716"
+    )
+    assert ShopeeSearchProvider._canonical_item_url(
+        "/AFC-i.1177025472.24948252880?sp_atk=redacted"
+    ) == "https://shopee.tw/AFC-i.1177025472.24948252880"
+
+
 def test_chain_returns_cached_results(tmp_path: Path) -> None:
     product = _make_product()
     cache = SearchCache(tmp_path / "c.json")
