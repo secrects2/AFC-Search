@@ -1,4 +1,5 @@
 import logging
+import os
 import urllib.parse
 from pathlib import Path
 
@@ -16,11 +17,13 @@ class ShopeeSearchProvider(BaseSearchProvider):
         profile_dir: str | Path = "data/browser_profiles/shopee",
         headless: bool = False,
         browser_channel: str = "chrome",
+        cdp_url: str = "",
     ) -> None:
         self.timeout = timeout
         self.profile_dir = str(profile_dir or "")
         self.headless = headless
         self.browser_channel = browser_channel.strip()
+        self.cdp_url = cdp_url.strip() or os.environ.get("SHOPEE_CDP_URL", "").strip()
         self._playwright_available = None
         self.last_status = "idle"
         self.last_error = ""
@@ -67,35 +70,64 @@ class ShopeeSearchProvider(BaseSearchProvider):
         with sync_playwright() as pw:
             browser = None
             context = None
+            page = None
+            owns_browser = False
+            owns_context = False
+            owns_page = False
             try:
-                browser_options = {
-                    "viewport": {"width": 1366, "height": 900},
-                    "locale": "zh-TW",
-                    "timezone_id": "Asia/Taipei",
-                    "user_agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                }
-                profile_path = self._profile_path()
-                if profile_path:
-                    profile_path.mkdir(parents=True, exist_ok=True)
-                    context = pw.chromium.launch_persistent_context(
-                        user_data_dir=str(profile_path),
-                        headless=self.headless,
-                        channel=self.browser_channel or None,
-                        chromium_sandbox=True,
-                        args=["--lang=zh-TW"],
-                        **browser_options,
+                if self.cdp_url:
+                    browser = pw.chromium.connect_over_cdp(
+                        self.cdp_url,
+                        timeout=self.timeout * 1000,
                     )
+                    if not browser.contexts:
+                        raise RuntimeError("Chrome CDP has no browser context")
+                    context = browser.contexts[0]
+                    page = context.new_page()
+                    owns_page = True
                 else:
-                    browser = pw.chromium.launch(headless=self.headless)
-                    context = browser.new_context(**browser_options)
+                    browser_options = {
+                        "viewport": {"width": 1366, "height": 900},
+                        "locale": "zh-TW",
+                        "timezone_id": "Asia/Taipei",
+                        "user_agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                    }
+                    profile_path = self._profile_path()
+                    if profile_path:
+                        profile_path.mkdir(parents=True, exist_ok=True)
+                        context = pw.chromium.launch_persistent_context(
+                            user_data_dir=str(profile_path),
+                            headless=self.headless,
+                            channel=self.browser_channel or None,
+                            chromium_sandbox=True,
+                            args=["--lang=zh-TW"],
+                            **browser_options,
+                        )
+                    else:
+                        browser = pw.chromium.launch(
+                            headless=self.headless,
+                            chromium_sandbox=True,
+                        )
+                        owns_browser = True
+                        context = browser.new_context(**browser_options)
+                    owns_context = True
+                    page = context.new_page()
+                    owns_page = True
 
-                page = context.new_page()
                 url = f"https://shopee.tw/search?keyword={urllib.parse.quote(keyword)}"
-                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
+                response = page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout * 1000,
+                )
+                if response is not None and response.status >= 400:
+                    self.last_status = "blocked"
+                    self.last_error = f"Shopee HTTP {response.status}"
+                    return []
 
                 # Wait a bit for JS to load
                 page.wait_for_timeout(3000)
@@ -148,9 +180,17 @@ class ShopeeSearchProvider(BaseSearchProvider):
                 self.last_error = str(exc)
                 LOGGER.warning("Shopee search failed for '%s': %s", keyword, exc)
             finally:
-                if context is not None:
+                # A CDP connection belongs to the user's running Chrome. Only
+                # close the page created by this provider; never close the
+                # user's context, browser, or existing tabs.
+                if owns_page and page is not None:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                if owns_context and context is not None:
                     context.close()
-                if browser is not None:
+                if owns_browser and browser is not None:
                     browser.close()
                 
         return results

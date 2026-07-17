@@ -157,6 +157,7 @@ def build_chain_provider(
     timeout: float = 15.0,
     shopee_profile_dir: str | Path = "data/browser_profiles/shopee",
     shopee_headless: bool = False,
+    shopee_cdp_url: str = "http://127.0.0.1:9223",
 ) -> ChainSearchProvider:
     """Helper to build the default search chain."""
     providers: list[BaseSearchProvider] = []
@@ -167,6 +168,7 @@ def build_chain_provider(
             timeout=int(timeout),
             profile_dir=shopee_profile_dir,
             headless=shopee_headless,
+            cdp_url=shopee_cdp_url,
         )
     )
     providers.append(FeebeeSearchProvider(platforms=platforms))

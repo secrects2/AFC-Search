@@ -60,6 +60,8 @@ BLOCKED_INDICATORS = [
     "發生錯誤",
     "請登入",
     "access denied",
+    "bad request",
+    "page not found",
     "403",
     "captcha",
     "verify",
@@ -111,6 +113,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
         profile_dir: str = "",
         headless: bool = False,
         browser_channel: str = "chrome",
+        cdp_url: str = "",
     ) -> None:
         self.timeout = timeout
         self.profile_dir = profile_dir or os.environ.get(
@@ -122,6 +125,7 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
         self.browser_channel = browser_channel or os.environ.get(
             "SHOPEE_BROWSER_CHANNEL", "chrome"
         )
+        self.cdp_url = cdp_url or os.environ.get("SHOPEE_CDP_URL", "")
         self._playwright_available: bool | None = None
 
     @property
@@ -165,142 +169,182 @@ class ShopeePlaywrightFallbackProvider(ShopeePriceProvider):
     def _fetch_with_playwright(
         self, url: str, result: ShopeePriceResult,
     ) -> ShopeePriceResult:
-        """Open URL in Playwright persistent context, extract price from DOM."""
+        """Open URL in Chrome/Playwright and extract price from the rendered DOM."""
         from playwright.sync_api import sync_playwright
 
-        # Resolve profile directory relative to project root
-        profile_path = Path(self.profile_dir)
-        if not profile_path.is_absolute():
-            profile_path = Path.cwd() / profile_path
-        profile_path.mkdir(parents=True, exist_ok=True)
-
         with sync_playwright() as pw:
-            context = pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_path),
-                headless=self.headless,
-                channel=self.browser_channel or None,
-                chromium_sandbox=True,
-                viewport={"width": 1366, "height": 900},
-                locale="zh-TW",
-                timezone_id="Asia/Taipei",
-                args=["--lang=zh-TW"],
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
+            browser = None
+            context = None
+            page = None
+            owns_browser = False
+            owns_context = False
+            owns_page = False
 
-            page = context.pages[0] if context.pages else context.new_page()
+            def cleanup() -> None:
+                # CDP attaches to the user's browser. Only close the page
+                # opened by this provider, never the user's context or tabs.
+                if owns_page and page is not None:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                if owns_context and context is not None:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                if owns_browser and browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
 
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
-            except Exception as exc:
-                context.close()
-                result.status = "error"
-                result.error_message = f"Navigation failed: {exc}"
-                return result
+                if self.cdp_url:
+                    browser = pw.chromium.connect_over_cdp(
+                        self.cdp_url,
+                        timeout=self.timeout * 1000,
+                    )
+                    if not browser.contexts:
+                        raise RuntimeError("Chrome CDP has no browser context")
+                    context = browser.contexts[0]
+                    page = context.new_page()
+                    owns_page = True
+                else:
+                    # Resolve profile directory relative to project root.
+                    profile_path = Path(self.profile_dir)
+                    if not profile_path.is_absolute():
+                        profile_path = Path.cwd() / profile_path
+                    profile_path.mkdir(parents=True, exist_ok=True)
+                    context = pw.chromium.launch_persistent_context(
+                        user_data_dir=str(profile_path),
+                        headless=self.headless,
+                        channel=self.browser_channel or None,
+                        chromium_sandbox=True,
+                        viewport={"width": 1366, "height": 900},
+                        locale="zh-TW",
+                        timezone_id="Asia/Taipei",
+                        args=["--lang=zh-TW"],
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                    )
+                    owns_context = True
+                    existing_pages = context.pages
+                    if existing_pages:
+                        page = existing_pages[0]
+                    else:
+                        page = context.new_page()
+                        owns_page = True
 
-            # After navigation, Shopee may have redirected and the original
-            # page reference may be stale.  Always use the latest active page.
-            try:
-                pages = context.pages
-                page = pages[-1] if pages else page
-            except Exception:
-                pass
-
-            # Wait a moment for dynamic content
-            try:
-                page.wait_for_selector(
-                    "div[class*='price'], span[class*='price']",
-                    timeout=10000,
-                )
-            except Exception:
                 try:
-                    page.wait_for_timeout(3000)
+                    response = page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=self.timeout * 1000,
+                    )
+                except Exception as exc:
+                    result.status = "error"
+                    result.error_message = f"Navigation failed: {exc}"
+                    return result
+
+                if response is not None and response.status >= 400:
+                    result.status = "blocked"
+                    result.error_message = f"Shopee HTTP {response.status}"
+                    return result
+
+                # A normal navigation keeps the same page reference. For an
+                # isolated context, retain the old latest-page behavior only
+                # when Playwright reports that the original page disappeared.
+                if not self.cdp_url:
+                    try:
+                        pages = context.pages
+                        if page not in pages and pages:
+                            page = pages[-1]
+                    except Exception:
+                        pass
+
+                try:
+                    page.wait_for_selector(
+                        "div[class*='price'], span[class*='price']",
+                        timeout=10000,
+                    )
+                except Exception:
+                    try:
+                        page.wait_for_timeout(3000)
+                    except Exception:
+                        pass
+
+                if is_shopee_language_page(page):
+                    title = ""
+                    try:
+                        title = page.title() or ""
+                    except Exception:
+                        pass
+                    result.status = "language_required"
+                    result.title = title
+                    result.error_message = (
+                        "Shopee opened language selection page. "
+                        "Please use the Chrome CDP login script once."
+                    )
+                    LOGGER.warning("Shopee language page detected.")
+                    return result
+
+                body_text = ""
+                try:
+                    body_text = (page.inner_text("body") or "")[:3000]
                 except Exception:
                     pass
 
-            # --- Language page detection (separate from generic blocking) ---
-            if is_shopee_language_page(page):
                 title = ""
                 try:
                     title = page.title() or ""
                 except Exception:
                     pass
-                result.status = "language_required"
-                result.title = title
-                result.error_message = (
-                    "Shopee opened language selection page. "
-                    "Please run tools/setup_shopee_profile.py once."
-                )
-                LOGGER.warning(
-                    "Shopee language page detected. Run tools/setup_shopee_profile.py to fix."
-                )
-                context.close()
+
+                if self._is_blocked(title, body_text):
+                    result.status = "blocked"
+                    result.title = title
+                    result.error_message = "Shopee blocked: 403 / captcha / login wall"
+                    LOGGER.info("Shopee Playwright blocked: %s", title[:60])
+                    return result
+
+                result.title = title.split("|")[0].strip() if "|" in title else title
+                result.price = self._extract_price_from_dom(page)
+                if result.price is None and body_text:
+                    result.price = self._extract_price_from_text(body_text)
+
+                if result.price is None:
+                    try:
+                        screenshot_dir = Path("output/screenshots")
+                        screenshot_dir.mkdir(parents=True, exist_ok=True)
+                        screenshot_path = screenshot_dir / f"{sanitize_filename(result.title or 'shopee')}.png"
+                        page.screenshot(path=str(screenshot_path), full_page=True)
+
+                        extractor = VisualPriceExtractor()
+                        if extractor.enabled:
+                            visual_result = extractor.extract_from_screenshot(
+                                str(screenshot_path), platform="shopee"
+                            )
+                            if visual_result.price is not None:
+                                result.price = visual_result.price
+                                result.raw_data = result.raw_data or {}
+                                result.raw_data["price_source"] = "visual_ocr"
+                                result.raw_data["visual_price_used"] = True
+                                result.raw_data["visual_price_method"] = visual_result.method
+                                result.raw_data["visual_price_confidence"] = visual_result.confidence
+                                result.raw_data["visual_price_raw_text"] = visual_result.raw_text
+                    except Exception as exc:
+                        LOGGER.warning("Shopee Playwright OCR fallback failed: %s", exc)
+
+                result.status = "ok" if result.price is not None else "price_unknown"
+                if result.price is None:
+                    result.error_message = "Price not found in rendered page"
                 return result
-
-            # --- Generic blocked detection ---
-            body_text = ""
-            try:
-                body_text = (page.inner_text("body") or "")[:3000]
-            except Exception:
-                pass
-
-            title = ""
-            try:
-                title = page.title() or ""
-            except Exception:
-                pass
-
-            if self._is_blocked(title, body_text):
-                result.status = "blocked"
-                result.title = title
-                result.error_message = "Shopee blocked: 403 / captcha / login wall"
-                LOGGER.info("Shopee Playwright blocked: %s", title[:60])
-                context.close()
-                return result
-
-            # Extract title
-            if "|" in title:
-                result.title = title.split("|")[0].strip()
-            else:
-                result.title = title
-
-            # Try to extract price from DOM
-            result.price = self._extract_price_from_dom(page)
-            if result.price is None and body_text:
-                result.price = self._extract_price_from_text(body_text)
-
-            # If still None, take screenshot and try OCR
-            if result.price is None:
-                try:
-                    screenshot_dir = Path("output/screenshots")
-                    screenshot_dir.mkdir(parents=True, exist_ok=True)
-                    screenshot_path = screenshot_dir / f"{sanitize_filename(result.title or 'shopee')}.png"
-                    page.screenshot(path=str(screenshot_path), full_page=True)
-                    
-                    extractor = VisualPriceExtractor()
-                    if extractor.enabled:
-                        visual_result = extractor.extract_from_screenshot(str(screenshot_path), platform="shopee")
-                        if visual_result.price is not None:
-                            result.price = visual_result.price
-                            result.raw_data = result.raw_data or {}
-                            result.raw_data["price_source"] = "visual_ocr"
-                            result.raw_data["visual_price_used"] = True
-                            result.raw_data["visual_price_method"] = visual_result.method
-                            result.raw_data["visual_price_confidence"] = visual_result.confidence
-                            result.raw_data["visual_price_raw_text"] = visual_result.raw_text
-                except Exception as e:
-                    LOGGER.warning("Shopee Playwright OCR fallback failed: %s", e)
-
-            context.close()
-
-            result.status = "ok" if result.price is not None else "price_unknown"
-            if result.price is None:
-                result.error_message = "Price not found in rendered page"
-
-            return result
+            finally:
+                cleanup()
 
     @staticmethod
     def _is_blocked(title: str, body_text: str) -> bool:

@@ -104,6 +104,7 @@ class DiscoverySearchService:
             timeout=float(self.config.request_timeout_seconds),
             shopee_profile_dir=self._shopee_profile_dir(),
             shopee_headless=bool(self.config.shopee_headless),
+            shopee_cdp_url=self.config.shopee_cdp_url,
         )
 
         if not provider.enabled:

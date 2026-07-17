@@ -37,6 +37,7 @@ class AppConfig:
     # Shopee persistent browser profile
     shopee_profile_dir: str = "data/browser_profiles/shopee"
     shopee_headless: bool = False
+    shopee_cdp_url: str = "http://127.0.0.1:9223"
 
     # Proxy settings
     proxy_url: str = ""  # e.g. http://user:pass@host:port or socks5://host:port
@@ -171,6 +172,7 @@ def load_config(path: Path) -> AppConfig:
         ("SHOPEE_MAX_RETRIES", "shopee_max_retries"),
         ("SHOPEE_PROFILE_DIR", "shopee_profile_dir"),
         ("SHOPEE_HEADLESS", "shopee_headless"),
+        ("SHOPEE_CDP_URL", "shopee_cdp_url"),
     ]:
         env_val = os.environ.get(env_key, "").strip()
         if env_val:

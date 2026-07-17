@@ -23,9 +23,10 @@ platforms:
 search_cache_hours: 24
 
 # Shopee browser profile 設定
-# 首次使用請先執行: python tools/setup_shopee_profile.py
+# 首次使用請先執行: powershell -ExecutionPolicy Bypass -File scripts/login_shopee.ps1
 shopee_profile_dir: data/browser_profiles/shopee
 shopee_headless: false
+shopee_cdp_url: http://127.0.0.1:9223
 
 notification:
   enabled: false
@@ -115,4 +116,3 @@ platform_rate_limits:
     cooldown_after_429_minutes: 1440
     max_retry_per_run: 0
     use_feebee_as_primary_fallback: true
-

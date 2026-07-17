@@ -3,17 +3,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
-$PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$SetupScript = Join-Path $ProjectRoot "tools\setup_shopee_profile.py"
+$StartScript = Join-Path $PSScriptRoot "start_shopee_chrome.ps1"
 
-if (-not (Test-Path -LiteralPath $PythonExe)) {
-    throw "Python virtual environment not found: $PythonExe"
+if (-not (Test-Path -LiteralPath $StartScript)) {
+    throw "Shopee Chrome CDP startup script not found: $StartScript"
 }
 
-if (-not (Test-Path -LiteralPath $SetupScript)) {
-    throw "Shopee profile setup script not found: $SetupScript"
-}
-
-& $PythonExe $SetupScript --url $Url
+& $StartScript -Url $Url
 exit $LASTEXITCODE

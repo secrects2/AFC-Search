@@ -52,6 +52,10 @@ class FallbackPriceProvider:
         self._shopee_headless = self._as_bool(
             _config_value(config, "shopee_headless", False)
         )
+        self._shopee_cdp_url = str(
+            _config_value(config, "shopee_cdp_url", "http://127.0.0.1:9223")
+            or ""
+        )
 
         # A daily run may have many candidates for one product. Reuse the
         # comparison-page results within that run instead of querying the same
@@ -147,6 +151,7 @@ class FallbackPriceProvider:
                         timeout=int(self._request_timeout),
                         profile_dir=self._shopee_profile_dir,
                         headless=self._shopee_headless,
+                        cdp_url=self._shopee_cdp_url,
                     ),
                 )
             )

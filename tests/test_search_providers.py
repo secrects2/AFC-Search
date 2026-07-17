@@ -346,6 +346,7 @@ def test_build_chain_provider_no_keys(tmp_path: Path) -> None:
 
 def test_build_chain_provider_uses_persistent_shopee_profile(tmp_path: Path) -> None:
     profile_dir = tmp_path / "shopee-profile"
+    cdp_url = "http://127.0.0.1:9223"
     chain = build_chain_provider(
         "",
         "",
@@ -353,9 +354,11 @@ def test_build_chain_provider_uses_persistent_shopee_profile(tmp_path: Path) -> 
         tmp_path / "c.json",
         shopee_profile_dir=profile_dir,
         shopee_headless=True,
+        shopee_cdp_url=cdp_url,
     )
 
     provider = next(provider for provider in chain.providers if provider.name == "shopee")
     assert provider.profile_dir == str(profile_dir)
     assert provider.headless is True
     assert provider.browser_channel == "chrome"
+    assert provider.cdp_url == cdp_url

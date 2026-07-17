@@ -92,6 +92,7 @@ class TestPlaywrightFallbackBlocked:
         assert ShopeePlaywrightFallbackProvider._is_blocked("蝦皮購物", "頁面無法顯示 發生錯誤")
         assert ShopeePlaywrightFallbackProvider._is_blocked("蝦皮", "請登入並再試一次")
         assert ShopeePlaywrightFallbackProvider._is_blocked("Verify", "captcha please verify")
+        assert ShopeePlaywrightFallbackProvider._is_blocked("400 Bad Request", "")
 
     def test_language_page_detected_separately(self):
         """Language selection is now detected by is_shopee_language_page."""
