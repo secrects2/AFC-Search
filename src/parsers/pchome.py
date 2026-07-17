@@ -23,6 +23,7 @@ _EMBEDDED_SALE_PRICE_KEYS = (
 
 _PRICE_NUMBER_RE = re.compile(r"(?<!\d)([0-9][0-9,]*(?:\.\d+)?)")
 _DISCOUNT_LABEL = "\u6298\u6263\u50f9"
+_OUT_OF_STOCK_MARKERS = ("熱銷一空", "本商品已熱銷一空")
 
 
 def _parse_positive_price(value: object) -> float | None:
@@ -128,6 +129,15 @@ def _extract_pchome_main_price(html_text: str) -> tuple[float | None, str]:
 
 class PChomeParser(GenericParser):
     platform = "pchome"
+
+    @classmethod
+    def detect_special_status(
+        cls, html_text: str, raw_text: str
+    ) -> tuple[str, str] | None:
+        normalized_text = re.sub(r"\s+", "", f"{html_text} {raw_text}")
+        if any(marker in normalized_text for marker in _OUT_OF_STOCK_MARKERS):
+            return "out_of_stock", "PChome 商品頁顯示：熱銷一空"
+        return None
 
     @classmethod
     def extract_price(cls, html_text: str, raw_text: str) -> tuple[float | None, str]:

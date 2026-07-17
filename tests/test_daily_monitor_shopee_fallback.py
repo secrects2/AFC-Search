@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -175,6 +176,48 @@ def test_direct_success_does_not_trigger_fallback(tmp_path: Path) -> None:
 
     service.check_single_candidate(candidate_id)
 
+    fallback.assert_not_called()
+
+
+def test_pchome_sold_out_is_excluded_without_fallback(tmp_path: Path) -> None:
+    db = Database(tmp_path / "sold-out.db")
+    product_id = db.upsert_product("AFC 新究極糖幸", suggested_price=2180)
+    candidate_id = db.upsert_candidate(
+        product_id=product_id,
+        url="https://24h.pchome.com.tw/prod/DBADRG-A900BT98Q",
+        platform="pchome",
+        title="AFC 新究極糖幸 60粒/瓶",
+        source_found_by="manual",
+    )
+    service = DailyMonitorService(
+        db,
+        AppConfig(request_delay_seconds=0, enable_image_match=False),
+        tmp_path,
+    )
+    service.extractor.extract = lambda **kwargs: ExtractionResult(
+        title="AFC 新究極糖幸 60粒/瓶",
+        platform="pchome",
+        parse_status="out_of_stock",
+        raw_data={
+            "special_status": "out_of_stock",
+            "evidence_text": "PChome 商品頁顯示：熱銷一空",
+        },
+    )
+    fallback = MagicMock()
+    service.fallback_provider.observe = fallback
+
+    extraction = service.check_single_candidate(candidate_id)
+
+    assert extraction.parse_status == "excluded"
+    assert extraction.error_message == "Excluded by PChome: 熱銷一空"
+    assert db.list_candidates()[0].status == "excluded"
+    with sqlite3.connect(tmp_path / "sold-out.db") as conn:
+        snapshot = conn.execute(
+            "SELECT price, error_message FROM price_snapshots "
+            "WHERE candidate_id = ?",
+            (candidate_id,),
+        ).fetchone()
+    assert snapshot == (None, "Excluded by PChome: 熱銷一空")
     fallback.assert_not_called()
 
 

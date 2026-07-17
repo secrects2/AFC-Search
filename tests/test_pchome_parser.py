@@ -1,3 +1,4 @@
+from src.config import AppConfig
 from src.parsers.pchome import PChomeParser
 
 
@@ -67,3 +68,34 @@ def test_pchome_parser_supports_embedded_sale_price() -> None:
 
     assert price == 3000.0
     assert evidence == "pchome embedded salePrice"
+
+
+def test_pchome_parser_detects_sold_out_page_before_price_parsing() -> None:
+    status = PChomeParser.detect_special_status(
+        "<div>本商品已熱銷一空，歡迎您繼續瀏覽其他商品。</div>",
+        "本商品已熱銷一空",
+    )
+
+    assert status == ("out_of_stock", "PChome 商品頁顯示：熱銷一空")
+
+
+def test_pchome_parser_stops_before_price_and_ocr_for_sold_out_page(
+    monkeypatch, tmp_path
+) -> None:
+    html = """
+    <html>
+      <head><meta property="og:title" content="AFC 測試商品"></head>
+      <body>
+        <div>本商品已熱銷一空，歡迎您繼續瀏覽其他商品。</div>
+        <span>$3,000</span>
+      </body>
+    </html>
+    """
+    parser = PChomeParser(AppConfig(enable_screenshot=False, enable_ocr=False))
+    monkeypatch.setattr(parser, "fetch_page", lambda url, platform="": html)
+
+    output = parser.parse("https://24h.pchome.com.tw/prod/test", tmp_path)
+
+    assert output.parse_status == "out_of_stock"
+    assert output.price is None
+    assert output.raw_data["special_status"] == "out_of_stock"

@@ -271,6 +271,8 @@ class DailyMonitorService:
             error_message = "Excluded by platform: coupang"
         elif keyword == "duplicate_final_product_page":
             error_message = "Excluded by duplicate final product page"
+        elif keyword == "pchome_out_of_stock":
+            error_message = "Excluded by PChome: 熱銷一空"
         elif extraction is not None:
             error_message = f"Excluded by image rule: {keyword}"
         else:
@@ -499,6 +501,19 @@ class DailyMonitorService:
                         extraction=direct_extraction,
                         evidence=direct_extraction.raw_data,
                     )
+
+            if platform_lower == "pchome" and direct_extraction.parse_status == "out_of_stock":
+                LOGGER.info(
+                    "PChome 商品熱銷一空，排除候選連結：%s",
+                    candidate.url[:100],
+                )
+                return self._mark_candidate_excluded(
+                    candidate,
+                    result,
+                    "pchome_out_of_stock",
+                    extraction=direct_extraction,
+                    evidence=direct_extraction.raw_data,
+                )
             
             # Map parse_status to observation status
             obs_status = "success"

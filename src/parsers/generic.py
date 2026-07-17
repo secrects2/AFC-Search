@@ -39,6 +39,24 @@ class GenericParser(BaseParser):
 
         title, raw_text, seller = self._extract_text_fields(html_text)
         image_urls = self._extract_image_urls(html_text, url)
+        special_status = self.detect_special_status(html_text, raw_text)
+        if special_status is not None:
+            parse_status, evidence = special_status
+            output = ParserOutput(
+                platform=self.platform,
+                url=url,
+                title=title,
+                seller=seller,
+                raw_text=raw_text[:5000],
+                parse_status=parse_status,
+                evidence_text=evidence,
+                image_urls=image_urls,
+            )
+            output.raw_data["price_source"] = parse_status
+            output.raw_data["special_status"] = parse_status
+            output.raw_data["final_url"] = self.last_fetched_url or url
+            return output
+
         price, evidence = self.extract_price(html_text, raw_text)
         output = ParserOutput(
             platform=self.platform,
@@ -94,6 +112,13 @@ class GenericParser(BaseParser):
             output.raw_data["price_source"] = "dom"
 
         return output
+
+    @classmethod
+    def detect_special_status(
+        cls, html_text: str, raw_text: str
+    ) -> tuple[str, str] | None:
+        """Return a platform-specific terminal status before price parsing."""
+        return None
 
     def _extract_text_fields(self, html_text: str) -> tuple[str, str, str]:
         try:
