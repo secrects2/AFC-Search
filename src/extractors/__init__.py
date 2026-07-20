@@ -85,6 +85,7 @@ MomoExtractor = ProductPageExtractor
 RutenExtractor = ProductPageExtractor
 PchomeExtractor = ProductPageExtractor
 YahooExtractor = ProductPageExtractor
+VivaExtractor = ProductPageExtractor
 GenericExtractor = ProductPageExtractor
 
 

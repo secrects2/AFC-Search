@@ -10,6 +10,7 @@ from src.parsers.momo import MomoParser
 from src.parsers.pchome import PChomeParser
 from src.parsers.ruten import RutenParser
 from src.parsers.shopee import ShopeeParser
+from src.parsers.viva import VivaParser
 from src.parsers.yahoo import YahooParser
 
 
@@ -20,6 +21,8 @@ def get_parser(platform: str, url: str, config: AppConfig) -> BaseParser:
         return ShopeeParser(config)
     if "momo" in normalized or "momo.com.tw" in host:
         return MomoParser(config)
+    if "viva" in normalized or "vivatv.com.tw" in host:
+        return VivaParser(config)
     if "yahoo" in normalized or "yahoo" in host:
         return YahooParser(config)
     if "pchome" in normalized or "pchome" in host:

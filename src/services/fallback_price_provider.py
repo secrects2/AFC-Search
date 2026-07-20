@@ -20,7 +20,7 @@ from src.search.shopee_search import ShopeeSearchProvider
 LOGGER = logging.getLogger(__name__)
 
 RETAIL_PLATFORMS = frozenset({
-    "shopee", "momo", "yahoo", "pchome", "ruten", "rakuten",
+    "shopee", "momo", "viva", "yahoo", "pchome", "ruten", "rakuten",
     "coupang", "etmall", "books", "friday",
 })
 AGGREGATOR_PLATFORMS = frozenset({"feebee", "findprice", "biggo", "lbj", "other"})
@@ -84,6 +84,7 @@ class FallbackPriceProvider:
         domains = {
             "shopee": "shopee.tw",
             "momo": "momo.com.tw",
+            "viva": "vivatv.com.tw",
             "yahoo": "yahoo.com.tw",
             "pchome": "pchome.com.tw",
             "ruten": "ruten.com.tw",

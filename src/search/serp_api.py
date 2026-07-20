@@ -26,6 +26,7 @@ SERP_ENDPOINT = "https://serpapi.com/search.json"
 PLATFORM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"shopee\.tw", re.IGNORECASE), "shopee"),
     (re.compile(r"momo\.com\.tw|momoshop\.com\.tw", re.IGNORECASE), "momo"),
+    (re.compile(r"vivatv\.com\.tw", re.IGNORECASE), "viva"),
     (re.compile(r"tw\.bid\.yahoo\.com|tw\.buy\.yahoo\.com|yahoo\.com\.tw", re.IGNORECASE), "yahoo"),
     (re.compile(r"24h\.pchome\.com\.tw|ecshweb\.pchome\.com\.tw|pchome\.com\.tw", re.IGNORECASE), "pchome"),
     (re.compile(r"ruten\.com\.tw", re.IGNORECASE), "ruten"),
@@ -86,6 +87,7 @@ def _build_site_restriction(platforms: list[str]) -> str:
     site_map = {
         "shopee": "shopee.tw",
         "momo": "momo.com.tw",
+        "viva": "vivatv.com.tw",
         "yahoo": "tw.buy.yahoo.com",
         "pchome": "24h.pchome.com.tw",
         "ruten": "ruten.com.tw",

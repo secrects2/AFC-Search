@@ -34,6 +34,10 @@ def test_detect_platform_yahoo() -> None:
     assert detect_platform("https://tw.buy.yahoo.com/gdsale/123") == "yahoo"
 
 
+def test_detect_platform_viva() -> None:
+    assert detect_platform("https://www.vivatv.com.tw/goods/3288022025") == "viva"
+
+
 def test_detect_platform_unknown() -> None:
     assert detect_platform("https://unknown-shop.com/item") == "other"
 
